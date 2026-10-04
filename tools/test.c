@@ -1,5 +1,7 @@
 #include "test.h"
 
+#include <stdint.h>
+
 #include <stdio.h>
 #include <string.h>
 
@@ -18,9 +20,10 @@ void test_fail(const char *expr, const char *file, int line) {
     report(file, line, expr, NULL);
 }
 
-void test_fail_int(long got, long want, const char *expr, const char *file, int line) {
+void test_fail_int(intptr_t got, intptr_t want, const char *expr, const char *file, int line) {
     char detail[96];
-    snprintf(detail, sizeof detail, "got %ld, want %ld", got, want);
+    snprintf(detail, sizeof detail, "got %lld, want %lld", (long long)got,
+                 (long long)want);
     report(file, line, expr, detail);
 }
 

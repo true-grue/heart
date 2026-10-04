@@ -37,9 +37,10 @@ const IoBackend io_backend_test = {
     test_close
 };
 
-/* The platform entry point when the build has no windowing target. Exactly one
- * platform file may define this, so a build that does have one keeps the guard. */
-#if !defined(IO_X11)
+/* The platform entry point when the build has no windowing target at all, which is
+ * what a headless test run wants. Both targets are named because a Windows build does
+ * not define IO_X11, and without that this would collide with the Windows platform. */
+#if !defined(IO_X11) && !defined(IO_WIN)
 const IoBackend *io_platform_backend(void) {
     return &io_backend_test;
 }

@@ -34,10 +34,24 @@ LIB_SRC  := src/arena.c \
 X11_SRC  := src/x11_platform.c
 X11_FLAGS := -DIO_X11
 X11_LIBS := -lX11
-HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null >/dev/null 2>&1 && echo 1)
+HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null 2>/dev/null && echo 1)
 
-ifeq ($(HAVE_X11),1)
-LIB_SRC  += $(X11_SRC)
+# The target is chosen by the compiler, not by the caller: a MinGW GCC is a Windows
+# build and needs no other switch, which is the whole point of the one-line seam.
+ifneq (,$(findstring mingw,$(CC)))
+LIB_SRC   += src/win_platform.c
+CFLAGS_X  := -DIO_WIN
+# winpthread carries clock_gettime, which is what the application asks for on every
+# platform. Some MinGW builds link it implicitly and some do not, so it is named.
+#
+# And it is linked statically on purpose. By default the executable imports
+# libwinpthread-1.dll and refuses to start without it beside it, so every copy of the
+# game has to carry a DLL along. Static costs about 60 kB and the game is one file that
+# cannot lose its neighbour. -static-libwinpthread does not exist in this GCC, so the
+# archive is picked out by hand.
+LDFLAGS_X := -lgdi32 -luser32 -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+else ifeq ($(HAVE_X11),1)
+LIB_SRC   += $(X11_SRC)
 CFLAGS_X  := $(X11_FLAGS)
 LDFLAGS_X := $(X11_LIBS)
 endif
@@ -82,7 +96,7 @@ $(CONFIG):
 
 DEP := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(AN_OBJ:.o=.d)
 
-.PHONY: all test analyze demo demo-asan clean
+.PHONY: all test analyze demo demo-asan win clean
 
 all: $(LIB)
 
@@ -118,6 +132,11 @@ $(STRESS_ASAN): $(LIB_SRC) $(STRESS_SRC) $(HDRS) $(CONFIG)
 
 $(QUEST_ASAN): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) $(INC) $(CFLAGS_X) -o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
+
+# Windows is chosen by the compiler; this target is only so that the compiler does not
+# have to be remembered. Nothing else about the build changes.
+win:
+	$(MAKE) CC=x86_64-w64-mingw32-gcc quest
 
 demo: $(STRESS)
 demo-asan: $(STRESS_ASAN)
