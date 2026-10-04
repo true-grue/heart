@@ -111,7 +111,7 @@ $(CONFIG):
 
 DEP := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(AN_OBJ:.o=.d)
 
-.PHONY: all test analyze demo demo-asan win clean $(GAMES)
+.PHONY: all test parity analyze demo demo-asan win clean $(GAMES)
 
 all: $(LIB)
 
@@ -166,6 +166,12 @@ quest-asan: $(QUEST_ASAN)
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
+
+# Compares walkthrough frames between the Linux and the Windows build. Kept out of
+# `test` because it needs Wine and a cross compiler, and a target that silently skips
+# is worse than one that is not run by default.
+parity:
+	python3 tools/py/check_parity.py
 
 analyze: $(AN_OBJ)
 
