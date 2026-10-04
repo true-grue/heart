@@ -125,6 +125,6 @@ which is the order the source games used.
 
 ## Assets
 
-`tutorial.script` is written by hand. `rats.script` and `field.script` are generated
-by `tools/py/source2dsl.py` from `assets/script/source/*.py`, which hold the author's
+`tutorial.script` and `heart.script` are written by hand. `field.script` came from a
+generator that no longer exists: the scripts are now maintained directly
 originals; edit the source or the tool, never the generated file.

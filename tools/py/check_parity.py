@@ -21,7 +21,7 @@ import subprocess
 import sys
 import tempfile
 
-GAMES = ("tutorial", "rats", "field", "heart")
+GAMES = ("tutorial", "field", "heart")
 WIN_CC = "x86_64-w64-mingw32-gcc"
 EXE = os.path.join("build", "quest.exe")
 

@@ -115,7 +115,6 @@ typedef struct GameDef {
 
 static const GameDef k_games[] = {
     { "tutorial", "assets/script/tutorial.script", "Учебный квест" },
-    { "rats", "assets/script/rats.script", "КРЫСОЛОВ" },
     { "field", "assets/script/field.script", "МЕЧ ИЗ ЗАМКА" },
     { "heart", "assets/script/heart.script", "Серое Сердце" }
 };

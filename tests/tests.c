@@ -309,13 +309,15 @@ static const Rule *find_rule(const Script *s, const char *room, const char *verb
 }
 
 /* Every script the game ships has to load and validate without a single
- * diagnostic. A generated asset that warns is a converter bug, and a hand written
- * one that warns is an authoring slip; neither should reach a player. */
+ * diagnostic; a hand written one that warns is an authoring slip and should not
+ * reach a player. Listed by name rather than globbed on purpose: heart was missing
+ * from this list for as long as the list existed, and nothing noticed, because a
+ * glob is exactly the thing that would have caught it. */
 static void test_every_shipped_script_is_clean(void) {
     static const char *const paths[] = {
         "assets/script/tutorial.script",
-        "assets/script/rats.script",
-        "assets/script/field.script"
+        "assets/script/field.script",
+        "assets/script/heart.script"
     };
     size_t k;
 

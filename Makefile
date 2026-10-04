@@ -76,7 +76,7 @@ HDRS := src/arena.h \
 # starts with no argument. The list is named rather than globbed: a script in the assets
 # directory is not automatically a build target, because a game that does not compile is
 # not something to discover during a build.
-GAMES     := tutorial rats field heart
+GAMES     := tutorial field heart
 GAME_BINS := $(addprefix $(BUILD)/,$(GAMES))
 
 STRESS_SRC := tests/stress.c
