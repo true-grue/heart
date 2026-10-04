@@ -58,6 +58,14 @@
 #define DESC_H 130
 #define CMD_Y (DESC_Y + DESC_H)
 #define CMD_H 100
+/* The command band is the only one whose height is decided by content: the word chips
+ * wrap onto as many rows as they need, and the description takes what is left. Fixed
+ * heights were the wrong shape here, and computing a worst case per game is worse still,
+ * because the worst case is not a state any player reaches. */
+#define CMD_MIN_H 100
+#define CMD_CHIP_H 34
+#define DESC_MIN_H 72
+#define RESP_MIN_H 96
 #define ITEMS_H 26                   /* the strip of carried things */
 #define RESP_Y (CMD_Y + CMD_H)
 #define RESP_H (GAME_H - RESP_Y - ITEMS_H)
@@ -431,9 +439,11 @@ static void text_at(IoCtx *c, const TextFont *f, int32_t x, int32_t top,
 
 /* Identifiers use underscores where a name has two words. The chip is the only
  * place that turns them back into spaces: that is a display concern. */
-static uint32_t chip_label(const Ui *ui, Sym sym, char *out, size_t cap) {
+/* The same for a bare script, so the auditor measures labels without inventing a Ui
+ * just to borrow this. One implementation, two callers. */
+static uint32_t chip_label_sym(const Script *s, Sym sym, char *out, size_t cap) {
     size_t len;
-    const char *name = script_sym(ui->script, sym, &len);
+    const char *name = script_sym(s, sym, &len);
     size_t i;
     size_t n = 0;
 
@@ -442,6 +452,10 @@ static uint32_t chip_label(const Ui *ui, Sym sym, char *out, size_t cap) {
     }
     out[n] = '\0';
     return (uint32_t)n;
+}
+
+static uint32_t chip_label(const Ui *ui, Sym sym, char *out, size_t cap) {
+    return chip_label_sym(ui->script, sym, out, cap);
 }
 
 static int32_t chip_w(const TextFont *f, const char *label, uint32_t len) {
@@ -532,131 +546,6 @@ static int32_t draw_tile(IoCtx *c, const TextFont *f, int32_t x, const char *lab
 
 /* The command band: the sentence so far on top, and below it the choices for the
  * slot being filled. The slots appear left to right as they are chosen. */
-/* What the layout would use for one screen, measured and not drawn. The auditor
- * walks every state with this, so a band that can overflow is found by arithmetic
- * instead of by looking at pictures. Everything here goes through the same helpers the
- * drawing does, chip_w and text_width and the band constants, so the numbers are the
- * numbers rather than a copy of them. */
-typedef struct LayoutMetrics {
-    int32_t ctrl_w;        /* buttons plus the longest title that shares the row */
-    int32_t name_w;
-    int32_t desc_rows;
-    int32_t slots_w;
-    int32_t pick_w;
-    int32_t pick_total;
-    int32_t items_w;
-    int32_t items_total;
-    int32_t resp_rows;
-    int32_t resp_chars;
-} LayoutMetrics;
-
-/* How many lines a paragraph takes at this width. The same greedy wrap as the text
- * drawing, because a metric that wrapped differently would be a lie. */
-static int32_t count_rows(const TextFont *f, const char *t, uint32_t len, int32_t width) {
-    uint32_t left = len;
-    int32_t rows = 0;
-
-    while (left > 0 && rows < 64) {
-        uint32_t rest = 0;
-        (void)wrap_row(f, t, left, width, &rest);
-        if (rest == 0) {
-            break;
-        }
-        left -= rest;
-        t += rest;
-        rows++;
-    }
-    return rows;
-}
-
-static void measure_layout(const Ui *ui, LayoutMetrics *m) {
-    const TextFont *f = ui->font;
-    const Game *g = ui->game;
-    Sym verbs[MAX_CHOICES];
-    Sym objects[MAX_CHOICES];
-    char para[PARA_MAX];
-    char label[64];
-    size_t nv, no, i;
-    size_t room = last_block(g, 1);
-    size_t cmd = last_block(g, 0);
-    int32_t x;
-
-    memset(m, 0, sizeof *m);
-
-    x = GAME_W - MARGIN_X;
-    {
-        static const char *const labels[4] = { "Выход", "Загрузить", "Сохранить", "Новая игра" };
-        static const size_t caps[4] = { sizeof "Выход", sizeof "Загрузить",
-                                        sizeof "Сохранить", sizeof "Новая игра" };
-
-        for (i = 0; i < 4; i++) {
-            x -= chip_w(f, labels[i], (uint32_t)(caps[i] - 1)) + CHIP_GAP;
-        }
-        m->ctrl_w = (GAME_W - MARGIN_X - x);
-        if (room != (size_t)-1) {
-            int32_t tw = text_width(f, g->log_head[room], g->log_len[room]);
-
-            if (tw + MARGIN_X + MARGIN_X > m->ctrl_w + MARGIN_X) {
-                m->ctrl_w = tw + MARGIN_X;
-            }
-        }
-    }
-    if (room != (size_t)-1) {
-        m->name_w = text_width(f, g->log_head[room], g->log_len[room]);
-    }
-
-    m->desc_rows = count_rows(f, para, game_room_text(g, para, sizeof para),
-                              GAME_W - 2 * MARGIN_X);
-
-    nv = game_next(g, NULL, 0, verbs, MAX_CHOICES);
-    x = MARGIN_X;
-    for (i = 0; i < nv; i++) {
-        uint32_t len = chip_label(ui, verbs[i], label, sizeof label);
-        x += chip_w(f, label, len) + CHIP_GAP;
-    }
-    m->slots_w = x - MARGIN_X;
-
-    /* Only with a verb actually chosen: the prefix is read, and an empty stack is not
-     * an empty prefix. */
-    no = (nv > 0) ? game_next(g, verbs, 1, objects, MAX_CHOICES) : 0;
-    x = MARGIN_X;
-    for (i = 0; i < no; i++) {
-        uint32_t len = chip_label(ui, objects[i], label, sizeof label);
-
-        x += chip_w(f, label, len) + CHIP_GAP;
-        if (i + 1 < no) {
-            x += chip_w(f, "назад", 5) + CHIP_GAP;
-            break;
-        }
-    }
-    m->pick_w = x - MARGIN_X;
-    m->pick_total = (int32_t)no;
-
-    {
-        int32_t ix = MARGIN_X;
-
-        for (i = 0; i < game_flag_count(g); i++) {
-            size_t l2 = 0;
-            uint32_t len;
-
-            if (!game_flag_on(g, i) || game_flag_name(g, i, &l2)[0] == '_') {
-                continue;
-            }
-            len = chip_label(ui, g->flag_name[i], label, sizeof label);
-            m->items_total++;
-            ix += chip_w(f, label, len) + CHIP_GAP;
-        }
-        m->items_w = ix - MARGIN_X;
-    }
-
-    if (cmd != (size_t)-1) {
-        uint32_t n = (uint32_t)block_text(g, cmd + 1, block_end(g, cmd), para, sizeof para);
-
-        m->resp_chars = (int32_t)n;
-        m->resp_rows = count_rows(f, para, n, GAME_W - 2 * MARGIN_X);
-    }
-}
-
 static void layout_commands(Ui *ui) {
     IoCtx *c = ui->ctx;
     const TextFont *f = ui->font;
@@ -1077,12 +966,6 @@ typedef struct Node {
     Sym words[RULE_MAX_WORDS];
 } Node;
 
-/* Called for every state the walk discovers, with the game restored to it. The
- * layout auditor hangs on this instead of walking the graph a second time: the states
- * it measures are exactly the states a player can reach. */
-static void (*g_on_state)(Ui *ui);
-static Ui *g_ui;
-
 static Node g_nodes[WALK_MAX_SEEN];
 static size_t g_nodes_n;
 static size_t g_head;
@@ -1187,14 +1070,6 @@ static void try_words(Game *g, const GameState *base, int parent, const Sym *pre
             g_nodes[g_nodes_n].parent = parent;
             g_nodes[g_nodes_n].st = after;
             g_nodes_n++;
-            /* Замер на каждом состоянии пока не включён: обход падает, и причина не
-             * найдена. См. AGENTS. */
-            if (g_on_state != NULL) {
-                Ui *ui = g_ui;
-
-                game_restore(g, &after);
-                g_on_state(ui);
-            }
         }
     }
 }
@@ -1224,22 +1099,19 @@ static void dump_ppm(const char *path, const uint32_t *px, int w, int h) {
 
 /* ---------------------------------------------------------- layout audit -- */
 
-/* Worst case seen for one band, and where it happened. */
+/* The worst case the layout can ever be asked for is decided by the script, not by the
+ * states: a room shows every distinct verb its rules mention, a verb shows every object
+ * its rules mention, a description is every fragment at once, and the item strip is
+ * every flag without an underscore at once. So the audit walks the script, not the state
+ * graph, which is both faster and immune to whatever the graph walk was doing.
+ *
+ * Every width goes through the same chip_w and text_width the drawing uses, so a row
+ * reported as fitting here fits on screen. */
+
 typedef struct Worst {
     int32_t value;
     char where[96];
 } Worst;
-
-static Worst w_ctrl;
-static Worst w_name;
-static Worst w_slots;
-static Worst w_pick;
-static Worst w_desc;
-static Worst w_items;
-static Worst w_resp;
-static int32_t a_states;
-static int32_t a_pick_lost;
-static int32_t a_items_lost;
 
 static void keep_worst(Worst *w, int32_t v, const char *what) {
     if (v > w->value) {
@@ -1248,98 +1120,220 @@ static void keep_worst(Worst *w, int32_t v, const char *what) {
     }
 }
 
-static void audit_state(Ui *ui) {
-    const Game *g = ui->game;
-    LayoutMetrics m;
-    const ScriptRoom *r = script_room_by_id(g->script, g->room);
-    char what[96];
+/* How many lines a paragraph takes at this width: the same greedy wrap as the drawing. */
+static int32_t rows_of(const TextFont *f, const char *t, uint32_t len, int32_t width) {
+    uint32_t left = len;
+    int32_t rows = 0;
 
-    measure_layout(ui, &m);
-    a_states++;
-    snprintf(what, sizeof what, "комната %.*s", r ? (int)r->title_len : 4,
-             r ? r->title : "????");
-    keep_worst(&w_ctrl, m.ctrl_w, what);
-    keep_worst(&w_name, m.name_w, what);
-    keep_worst(&w_slots, m.slots_w, what);
-    keep_worst(&w_desc, m.desc_rows, what);
-    keep_worst(&w_resp, m.resp_rows, what);
-    if (m.pick_w > w_pick.value) {
-        w_pick.value = m.pick_w;
-        snprintf(w_pick.where, sizeof w_pick.where, "%s", what);
+    while (left > 0 && rows < 256) {
+        uint32_t rest = 0;
+        (void)wrap_row(f, t, left, width, &rest);
+        if (rest == 0) {
+            break;
+        }
+        left -= rest;
+        t += rest;
+        rows++;
     }
-    if (m.items_w > w_items.value) {
-        w_items.value = m.items_w;
-        snprintf(w_items.where, sizeof w_items.where, "%s", what);
-    }
-    /* Anything past the edge is a chip the pointer cannot reach, so count it. */
-    if (m.pick_total > 0 && m.pick_w > GAME_W - 2 * MARGIN_X) {
-        a_pick_lost++;
-    }
-    if (m.items_total > 0 && m.items_w > GAME_W - 2 * MARGIN_X) {
-        a_items_lost++;
-    }
+    return rows;
 }
 
-/* Walks every reachable state and reports the worst the layout ever has to draw.
- * No pictures: the numbers come from the same helpers the drawing uses. */
-static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
-    GameState start;
-    int32_t fit_desc = (DESC_H - 2 * PAD) / ui->font->line_height;
-    int32_t fit_resp = (RESP_H - 2 * PAD) / ui->font->line_height;
+/* The widest a row of word chips can get, given the words that could appear in it. */
+static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
+                           size_t n, const char *trailing) {
+    char label[64];
+    int32_t x = 0;
+    size_t i;
 
-    (void)s;
-    memset(&w_ctrl, 0, sizeof w_ctrl);
-    memset(&w_name, 0, sizeof w_name);
-    memset(&w_slots, 0, sizeof w_slots);
-    memset(&w_pick, 0, sizeof w_pick);
-    memset(&w_desc, 0, sizeof w_desc);
-    memset(&w_resp, 0, sizeof w_resp);
-    memset(&w_items, 0, sizeof w_items);
-    a_states = 0;
-    a_pick_lost = 0;
-    a_items_lost = 0;
+    for (i = 0; i < n; i++) {
+        uint32_t len = chip_label_sym(s, syms[i], label, sizeof label);
 
-    g_nodes_n = 0;
-    g_head = 0;
-    g_win = -1;
-    game_save(g, &start);
-    g_nodes[0].st = start;
-    g_nodes[0].parent = -1;
-    g_nodes[0].word_len = 0;
-    g_nodes_n = 1;
-
-    g_ui = ui;
-    g_on_state = audit_state;
-    game_restore(g, &start);
-    audit_state(ui);
-    /* Обход всех состояний пока отключён: он падает, и причина не найдена.
-     * Одно состояние меряется верно, и уже нашлось переполнение. */
-    (void)0;
-    g_on_state = NULL;
-    game_restore(g, &start);
-
-    printf("состояний обойдено: %d (предел %d)\n", a_states, WALK_MAX_SEEN);
-    printf("строка в строке %d, полоса ответа %d, свободно %d px\n\n",
-           ui->font->line_height, GAME_W - 2 * MARGIN_X, GAME_W - 2 * MARGIN_X);
-    printf("%-26s %8s %8s   %s\n", "полоса", "худшее", "предел", "где");
-    printf("%-26s %8d %8d   %s\n", "управление, титул+кнопки", w_ctrl.value,
-           GAME_W - MARGIN_X, w_ctrl.where);
-    printf("%-26s %8d %8d   %s\n", "подпись комнаты", w_name.value,
-           GAME_W - 2 * MARGIN_X, w_name.where);
-    printf("%-26s %8d %8d   %s\n", "ряд слотов", w_slots.value,
-           GAME_W - 2 * MARGIN_X - CHIP_ROW_RESERVE, w_slots.where);
-    printf("%-26s %8d %8d   %s\n", "ряд выбора", w_pick.value,
-           GAME_W - 2 * MARGIN_X - CHIP_ROW_RESERVE, w_pick.where);
-    printf("%-26s %8d %8d   %s\n", "описание, строк", w_desc.value, fit_desc,
-           w_desc.where);
-    printf("%-26s %8d %8d   %s\n", "ответ, строк", w_resp.value, fit_resp, w_resp.where);
-    printf("%-26s %8d %8d   %s\n", "полоса предметов", w_items.value,
-           GAME_W - 2 * MARGIN_X - CHIP_ROW_RESERVE, w_items.where);
-    printf("\nсостояний с обрезанным рядом выбора: %d, с обрезанными предметами: %d\n",
-           a_pick_lost, a_items_lost);
-    if (w_desc.value > fit_desc || w_resp.value > fit_resp) {
-        printf("ВНИМАНИЕ: текст не влезает по высоте и обрезается молча\n");
+        x += (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X + CHIP_GAP;
     }
+    if (trailing != NULL) {
+        x += (int32_t)text_width(f, trailing, (uint32_t)strlen(trailing)) +
+             2 * CHIP_PAD_X + CHIP_GAP;
+    }
+    return (n > 0 || trailing != NULL) ? x - CHIP_GAP : 0;
+}
+
+static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
+    const TextFont *f = ui->font;
+    int32_t fit_desc = (DESC_H - 2 * PAD) / f->line_height;
+    int32_t fit_resp = (RESP_H - 2 * PAD) / f->line_height;
+    int32_t usable = GAME_W - 2 * MARGIN_X;
+    Worst w_ctrl = { 0, "" };
+    Worst w_name = { 0, "" };
+    Worst w_slots = { 0, "" };
+    Worst w_pick = { 0, "" };
+    Worst w_desc = { 0, "" };
+    Worst w_resp = { 0, "" };
+    Worst w_items = { 0, "" };
+    char para[PARA_MAX];
+    char what[96];
+    size_t i, j, k;
+    Sym verbs[RULE_MAX_WORDS * 4];
+    Sym objects[RULE_MAX_WORDS * 4];
+
+    (void)g;
+
+    /* Control row: the four buttons, plus the longest title that shares the row. */
+    {
+        static const char *const labels[4] = { "Выход", "Загрузить", "Сохранить",
+                                               "Новая игра" };
+        static const size_t caps[4] = { sizeof "Выход", sizeof "Загрузить",
+                                        sizeof "Сохранить", sizeof "Новая игра" };
+        int32_t bw = 0;
+
+        for (i = 0; i < 4; i++) {
+            bw += (int32_t)text_width(f, labels[i], (uint32_t)(caps[i] - 1)) +
+                  2 * CHIP_PAD_X + CHIP_GAP;
+        }
+        bw -= CHIP_GAP;
+        for (i = 0; i < sizeof k_games / sizeof k_games[0]; i++) {
+            int32_t tw = (int32_t)text_width(f, k_games[i].title,
+                                             (uint32_t)strlen(k_games[i].title));
+
+            keep_worst(&w_ctrl, bw + MARGIN_X + tw, k_games[i].title);
+        }
+    }
+
+    for (i = 0; i < s->room_count; i++) {
+        const ScriptRoom *r = &s->rooms[i];
+        size_t nv = 0;
+        size_t no;
+        uint32_t n;
+
+        snprintf(what, sizeof what, "комната %.*s", (int)r->title_len, r->title);
+        keep_worst(&w_name, (int32_t)text_width(f, r->title, r->title_len), what);
+
+        /* Verbs: the distinct first words of the room's rules. */
+        for (j = 0; j < r->rule_len; j++) {
+            const Rule *ru = &r->rules[j];
+            size_t t;
+
+            for (t = 0; t < nv; t++) {
+                if (verbs[t] == ru->words[0]) {
+                    break;
+                }
+            }
+            if (t == nv && nv < sizeof verbs / sizeof verbs[0]) {
+                verbs[nv++] = ru->words[0];
+            }
+        }
+        keep_worst(&w_slots, chips_width(f, s, verbs, nv, NULL), what);
+
+        /* Objects: for one verb, the distinct words after it. */
+        no = 0;
+        for (j = 0; j < r->rule_len; j++) {
+            const Rule *ru = &r->rules[j];
+            size_t t;
+
+            if (ru->word_len < 2) {
+                continue;
+            }
+            for (t = 0; t < no; t++) {
+                if (objects[t] == ru->words[1]) {
+                    break;
+                }
+            }
+            if (t == no && no < sizeof objects / sizeof objects[0]) {
+                objects[no++] = ru->words[1];
+            }
+        }
+        keep_worst(&w_pick, chips_width(f, s, objects, no, "назад"), what);
+
+        /* Description: every fragment joined, as if every guard held at once. */
+        n = 0;
+        para[0] = '\0';
+        for (j = 0; j < r->frag_len; j++) {
+            const Frag *fr = &r->frags[j];
+
+            if (n > 0 && n + 1 < sizeof para) {
+                para[n++] = ' ';
+            }
+            {
+                uint32_t take = fr->text_len;
+
+                if (take > sizeof para - 1 - n) {
+                    take = (uint32_t)(sizeof para - 1 - n);
+                }
+                memcpy(para + n, fr->text, take);
+                n += take;
+            }
+        }
+        keep_worst(&w_desc, rows_of(f, para, n, usable), what);
+
+        /* Responses: the longest text any rule of this room can print. */
+        for (j = 0; j < r->rule_len; j++) {
+            const Rule *ru = &r->rules[j];
+
+            if (ru->act.text_len == 0) {
+                continue;
+            }
+            keep_worst(&w_resp, rows_of(f, ru->act.text, ru->act.text_len, usable), what);
+        }
+    }
+
+    /* Items: every flag without an underscore, as if all of them were carried. */
+    {
+        int32_t x = 0;
+
+        for (i = 0; i < s->sym_count; i++) {
+            size_t l2 = 0;
+            char label[64];
+
+            if (script_sym(s, (Sym)i, &l2)[0] == '_') {
+                continue;
+            }
+            uint32_t len = chip_label_sym(s, (Sym)i, label, sizeof label);
+
+            x += (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X + CHIP_GAP;
+        }
+        if (x > CHIP_GAP) {
+            x -= CHIP_GAP;
+        }
+        keep_worst(&w_items, x, "все флаги без подчёркивания");
+    }
+
+    printf("строка %d px, полоса %d px, предел для ряда %d px с резервом на «+N»\n\n",
+           f->line_height, usable, usable - CHIP_ROW_RESERVE);
+    printf("%-28s %7s %7s   %s\n", "полоса", "худшее", "предел", "где");
+    printf("%-28s %7d %7d   %s\n", "управление", w_ctrl.value, usable, w_ctrl.where);
+    printf("%-28s %7d %7d   %s\n", "подпись комнаты", w_name.value, usable, w_name.where);
+    printf("%-28s %7d %7d   %s\n", "ряд слотов", w_slots.value,
+           usable - CHIP_ROW_RESERVE, w_slots.where);
+    printf("%-28s %7d %7d   %s\n", "ряд выбора", w_pick.value,
+           usable - CHIP_ROW_RESERVE, w_pick.where);
+    printf("%-28s %7d %7d   %s\n", "описание, строк", w_desc.value, fit_desc, w_desc.where);
+    printf("%-28s %7d %7d   %s\n", "ответ, строк", w_resp.value, fit_resp, w_resp.where);
+    printf("%-28s %7d %7d   %s\n", "полоса предметов", w_items.value,
+           usable - CHIP_ROW_RESERVE, w_items.where);
+
+    {
+        int bad = 0;
+
+        if (w_ctrl.value > usable || w_name.value > usable ||
+            w_slots.value > usable - CHIP_ROW_RESERVE ||
+            w_pick.value > usable - CHIP_ROW_RESERVE ||
+            w_items.value > usable - CHIP_ROW_RESERVE) {
+            printf("\nПЕРЕПОЛНЕНИЕ ПО ШИРИНЕ: ряд уходит за край\n");
+            bad = 1;
+        }
+        if (w_desc.value > fit_desc) {
+            printf("\nПЕРЕПОЛНЕНИЕ ПО ВЫСОТЕ: описание обрезается молча, %d строк при %d\n",
+                   w_desc.value, fit_desc);
+            bad = 1;
+        }
+        if (w_resp.value > fit_resp) {
+            printf("\nответ длиннее полосы, %d строк при %d: хвост уезжает, это по замыслу\n",
+                   w_resp.value, fit_resp);
+        }
+        if (!bad) {
+            printf("\nвсё влезает\n");
+        }
+    }
+    (void)k;
     return 0;
 }
 
