@@ -68,7 +68,7 @@
 #define CMD_SLOTS RULE_MAX_WORDS
 
 #define TYPE_CPS 45                /* characters a second while the answer types */
-#define PARA_MAX 1024
+#define PARA_MAX 4096
 #define MAX_CHOICES 16
 #define MAX_HITS 48
 #define ROWS_MAX 32
@@ -141,7 +141,13 @@ typedef struct Ui {
      * is the blink. */
     double scroll;
     double scroll_want;
+    /* The description scrolls its tail too, for the same reason the answer does: a room
+     * can say more than fits, and cutting it off is worse than moving it. */
+    double dscroll;
+    double dscroll_want;
     int animate;          /* off for the walkthrough: the frames must be comparable */
+    int overfull;         /* frames whose bands could not hold their own text */
+    size_t last_room;      /* to notice a new room and start its scroll over */
     int done;             /* the answer is fully revealed */
 } Ui;
 
@@ -355,7 +361,13 @@ static double text_tail(IoCtx *c, const TextFont *f, int32_t top, int fit, int32
     while (left > 0 && r.n < ROWS_MAX) {
         uint32_t rest = 0;
         (void)wrap_row(f, full, left, width, &rest);
-        if (rest == r.at[r.n]) {
+        /* Only "no progress" ends the split. Comparing the row's byte count against
+         * r.at[r.n], an absolute offset that grows with every row, looks like a guard
+         * and is not one: it fires the moment two neighbouring rows happen to be the
+         * same length in bytes, and the rest of the paragraph is silently dropped.
+         * That is data dependent, which is why it read as a broken room rather than a
+         * broken engine. */
+        if (rest == 0) {
             break;
         }
         left -= rest;
@@ -613,14 +625,17 @@ typedef struct Layout {
     int32_t resp_y, resp_h;
     int32_t items_y, items_h;
     int32_t chip_rows;
+    int overfull;                  /* the frame held more than 480 pixels */
 } Layout;
 
-static Layout compute_layout(Ui *ui, const char *ans, uint32_t ans_n) {
+static Layout compute_layout(Ui *ui, const char *desc, uint32_t desc_len,
+                             const char *ans, uint32_t ans_n) {
     const TextFont *f = ui->font;
     Layout L;
     Sym choices[MAX_CHOICES];
     const char *trailing = NULL;
     size_t n = 0;
+    uint32_t desc_n;
     int32_t yb;
     int32_t rows;
 
@@ -630,6 +645,7 @@ static Layout compute_layout(Ui *ui, const char *ans, uint32_t ans_n) {
     L.name_h = NAME_H;
     L.desc_y = CTRL_H + NAME_H;
 
+    L.overfull = 0;
     L.items_h = ITEMS_H;
     L.items_y = GAME_H - L.items_h;
     yb = L.items_y;
@@ -656,26 +672,56 @@ static Layout compute_layout(Ui *ui, const char *ans, uint32_t ans_n) {
     L.tile_y = L.cmd_y + CMD_PAD;
     L.pick_y = L.cmd_y + CMD_PAD + TILE_H + CMD_PAD;
 
+    /* The description is exactly its own text. It used to take the remainder, which
+     * sounds generous and is not: when the answer and the command band together wanted
+     * more than the canvas had, the remainder went negative and the description was
+     * quietly clipped, with only the first lines showing. A band that must not lose
+     * text gets the height of that text. */
+    (void)desc_len;
+    desc_n = (desc != NULL && desc[0] != '\0')
+                 ? rows_of(f, desc, (uint32_t)strlen(desc), GAME_W - 2 * MARGIN_X)
+                 : 0;
+    {
+        int32_t want = desc_n * f->line_height + 2 * PAD;
+        int32_t avail = yb - L.desc_y;
+
+        if (want > avail - RESP_MIN_H) {
+            want = avail - RESP_MIN_H;
+        }
+        if (want < f->line_height + 2 * PAD) {
+            want = f->line_height + 2 * PAD;
+        }
+        L.desc_h = want;
+    }
+
+    /* The answer takes what is left, and it is the one that gives: it already scrolls
+     * its tail, so a short band costs the reader a scroll and a clipped description
+     * costs them the room. */
     rows = (ans_n > 0) ? rows_of(f, ans, ans_n, GAME_W - 2 * MARGIN_X) : 1;
-    L.resp_h = rows * f->line_height + 2 * PAD;
+    L.resp_h = yb - L.desc_y - L.desc_h;
+    (void)rows;
+    if (L.resp_h < rows * f->line_height + 2 * PAD) {
+        L.resp_h = rows * f->line_height + 2 * PAD;
+    }
     if (L.resp_h < RESP_MIN_H) {
         L.resp_h = RESP_MIN_H;
     }
-    if (L.resp_h > yb - L.desc_y - DESC_MIN_H) {
-        L.resp_h = yb - L.desc_y - DESC_MIN_H;
-        if (L.resp_h < CMD_PAD) {
-            L.resp_h = CMD_PAD;
-        }
-    }
     L.resp_y = L.cmd_y - L.resp_h;
-    L.desc_h = L.resp_y - L.desc_y;
-    if (L.desc_h < 0) {
-        L.desc_h = 0;
+    if (L.resp_y < L.desc_y + L.desc_h) {
+        /* Genuinely over-full. Reported rather than hidden, so the walkthrough can name
+         * the room instead of the picture just looking wrong. */
+        L.overfull = 1;
+        L.resp_h = L.cmd_y - L.desc_y - L.desc_h;
+        if (L.resp_h < 0) {
+            L.resp_h = 0;
+        }
+        L.resp_y = L.cmd_y - L.resp_h;
     }
     return L;
 }
 
-static Layout layout_commands(Ui *ui, const char *ans, uint32_t ans_n) {
+static Layout layout_commands(Ui *ui, const char *desc, uint32_t desc_len,
+                             const char *ans, uint32_t ans_n) {
     IoCtx *c = ui->ctx;
     const TextFont *f = ui->font;
     Sym choices[MAX_CHOICES];
@@ -683,7 +729,7 @@ static Layout layout_commands(Ui *ui, const char *ans, uint32_t ans_n) {
     size_t n = 0;
     size_t i;
     char label[LABEL_MAX];
-    Layout L = compute_layout(ui, ans, ans_n);
+    Layout L = compute_layout(ui, desc, desc_len, ans, ans_n);
 
     if (!ui->done && ui->have_last) {
         /* While the answer is still being written, the command that caused it stays in
@@ -866,7 +912,7 @@ static void draw(Ui *ui) {
                    ? block_text(g, cmd + 1, block_end(g, cmd), para, sizeof para)
                    : 0;
     desc_n = game_room_text(g, dpara, sizeof dpara);
-    L = compute_layout(ui, para, (uint32_t)answer_n);
+    L = compute_layout(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
 
     band(c, L.ctrl_y, L.ctrl_h, C_BAND);
     band(c, L.name_y, L.name_h, C_BAND);
@@ -909,13 +955,37 @@ static void draw(Ui *ui) {
      * once. Reading the log left the player looking at the room as it was on entry. */
     io_push_clip(c, (IoRect){ 0, L.desc_y, GAME_W, L.desc_h });
     if (desc_n > 0) {
-        text_top(c, f, L.desc_y + PAD, GAME_W - 2 * MARGIN_X, dpara, (uint32_t)desc_n,
-                 C_INK);
+        int fit = (L.desc_h - 2 * PAD) / f->line_height;
+        int32_t ex = MARGIN_X;
+        int32_t ey = L.desc_y + PAD;
+
+        if (fit < 1) {
+            fit = 1;
+        }
+        ui->dscroll_want = text_tail(c, f, L.desc_y + PAD, fit, GAME_W - 2 * MARGIN_X,
+                                     dpara, (uint32_t)desc_n, (uint32_t)desc_n, C_INK,
+                                     ui->dscroll, &ex, &ey);
+        if (!ui->animate) {
+            /* The walkthrough must land on the frame the player would have seen. */
+            ui->dscroll = ui->dscroll_want;
+        }
     }
     io_pop_clip(c);
 
+    if (L.overfull) {
+        ui->overfull++;
+    }
+    /* A new room means a new description, and the scroll starts at its head again.
+     * Keyed on the room rather than on the click, so loading and starting a new game
+     * reset it too. */
+    if (room != ui->last_room) {
+        ui->last_room = room;
+        ui->dscroll = 0.0;
+        ui->dscroll_want = 0.0;
+    }
+
     /* command band */
-    (void)layout_commands(ui, para, (uint32_t)answer_n);
+    (void)layout_commands(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
 
     /* The strip of what the player is carrying. A flag whose name starts with an
      * underscore is state rather than a thing, and the underscore is the only marker
@@ -1017,8 +1087,23 @@ static void draw(Ui *ui) {
         int fit = (L.resp_h - 2 * PAD) / f->line_height;
         int32_t end_x = MARGIN_X;
         int32_t end_y = L.resp_y + PAD;
+        int32_t top = L.resp_y + PAD;
 
-        ui->scroll_want = text_tail(c, f, L.resp_y + PAD, fit, GAME_W - 2 * MARGIN_X, para,
+        /* Bottom anchored: the answer belongs next to the commands it produced, and the
+         * slack reads as a gap under the description rather than a hole above them. */
+        {
+            int32_t rows = rows_of(f, para, (uint32_t)n, GAME_W - 2 * MARGIN_X);
+
+            if (rows < fit) {
+                top = L.resp_y + L.resp_h - PAD - rows * f->line_height;
+                if (top < L.resp_y + PAD) {
+                    top = L.resp_y + PAD;
+                }
+                fit = rows;
+            }
+        }
+
+        ui->scroll_want = text_tail(c, f, top, fit, GAME_W - 2 * MARGIN_X, para,
                                     (uint32_t)n, (uint32_t)vis, C_INK, ui->scroll,
                                     &end_x, &end_y);
         if (!ui->animate) {
@@ -1263,7 +1348,7 @@ static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
 
 static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
     const TextFont *f = ui->font;
-    Layout L = compute_layout(ui, "", 0);
+    Layout L = compute_layout(ui, "", 0, "", 0);
     int32_t fit_desc = (L.desc_h - 2 * PAD) / f->line_height;
     int32_t fit_resp = (L.resp_h - 2 * PAD) / f->line_height;
     int32_t usable = GAME_W - 2 * MARGIN_X;
@@ -1272,6 +1357,10 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
     Worst w_slots = { 0, "" };
     Worst w_pick = { 0, "" };
     Worst w_desc = { 0, "" };
+    Worst w_over = { 0, "" };
+    Worst w_desc_at = { 0, "" };
+    int rooms_over = 0;
+    int32_t w_desc_rows = 0;
     Worst w_resp = { 0, "" };
     Worst w_items = { 0, "" };
     char para[PARA_MAX];
@@ -1308,9 +1397,42 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
         size_t nv = 0;
         size_t no;
         uint32_t n;
+        int32_t desc_rows_room;
 
         snprintf(what, sizeof what, "комната %.*s", (int)r->title_len, r->title);
         keep_worst(&w_name, (int32_t)text_width(f, r->title, r->title_len), what);
+
+        /* Every room, not just the rooms the winning path walks through. The
+         * description is the one band that must never lose text, so it is checked
+         * against the smallest band the engine can be forced to give it: one row of
+         * chips and the minimum answer. If it fits there, it fits anywhere. */
+        {
+            char room_para[PARA_MAX];
+            size_t rn = 0;
+            size_t q;
+
+            for (q = 0; q < r->frag_len && rn + 1 < sizeof room_para; q++) {
+                rn += (size_t)snprintf(room_para + rn, sizeof room_para - rn, "%s%.*s",
+                                       q > 0 ? " " : "", (int)r->frags[q].text_len,
+                                       r->frags[q].text);
+                if (rn >= sizeof room_para) {
+                    rn = sizeof room_para - 1;
+                    break;
+                }
+            }
+            desc_rows_room = (rn > 0)
+                                 ? rows_of(f, room_para, (uint32_t)strlen(room_para),
+                                           usable)
+                                 : 0;
+            if (desc_rows_room > fit_desc) {
+                rooms_over++;
+                keep_worst(&w_over, desc_rows_room, what);
+            }
+            if (desc_rows_room > w_desc_rows) {
+                w_desc_rows = desc_rows_room;
+                keep_worst(&w_desc_at, desc_rows_room, what);
+            }
+        }
 
         /* Verbs: the distinct first words of the room's rules. */
         for (j = 0; j < r->rule_len; j++) {
@@ -1513,21 +1635,36 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
      * accepts but the screen cannot show is not a walkthrough. */
     game_init(g, s);
     ui->cmd.filled = 0;
-    for (step = 0; step <= steps; step++) {
+    for (step = 0; step <= steps + 1; step++) {
         char name[512];
-        int at = node_at_depth(g_win, step);
+
         ui->typed = 1.0e9;   /* no animation: the frames have to be comparable */
         ui->animate = 0;
         ui->done = 1;
+        ui->cmd.filled = 0;
         draw(ui);
         snprintf(name, sizeof name, "%s/frame%02d.ppm", dir, step);
         dump_ppm(name, ui->ctx->pixels, ui->ctx->w, ui->ctx->h);
-        if (step == steps) {
+        if (step > steps) {
             break;
         }
-        game_command(g, g_nodes[at].words, (size_t)g_nodes[at].word_len);
+        /* The command stored on a node is the one that reached it, so stepping forward
+         * runs the words of the node one level below where we stand. node_at_depth
+         * counts back from the winning node, so the level we want comes out as the
+         * remaining distance. Getting this backwards runs the last command first,
+         * which fails in the starting room and freezes the whole replay there. */
+        {
+            int at = node_at_depth(g_win, steps - step - 1);
+
+            game_command(g, g_nodes[at].words, (size_t)g_nodes[at].word_len);
+        }
     }
-    printf("кадров записано: %d\n", steps + 1);
+    printf("кадров записано: %d\n", steps + 2);
+    if (ui->overfull > 0) {
+        printf("кадров не влезло в 480: %d\n", ui->overfull);
+    } else {
+        printf("все полосы вместили свой текст\n");
+    }
     return 0;
 }
 
@@ -1884,8 +2021,9 @@ int main(int argc, char **argv) {
                 k = 1.0;
             }
             ui.scroll += (ui.scroll_want - ui.scroll) * k;
+            ui.dscroll += (ui.dscroll_want - ui.dscroll) * k;
         }
-        if (!ui.done || ui.scroll != ui.scroll_want) {
+        if (!ui.done || ui.scroll != ui.scroll_want || ui.dscroll != ui.dscroll_want) {
             dirty = 1;
         }
         if (!ui.done) {
