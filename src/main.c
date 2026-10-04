@@ -30,26 +30,6 @@
  * every platform and at every window size.
  */
 
-#define GAME_W 640
-#define GAME_H 480
-#define SCALE 2
-
-#define FONT_PATH "assets/font/sans.font"
-
-#define MARGIN_X 16
-#define PAD 10                     /* text inset inside a band */
-#define BTN_H 26                   /* a button in the control band */
-#define CHIP_H 44                  /* a verb or object chip */
-#define CHIP_GAP 4
-#define CHIP_PAD_X 6
-/* Kept free at the right end of every chip row so the "and N more" chip has somewhere
- * to go. Seven verbs is the widest row in the shipped games and it fits with sixteen
- * pixels to spare, but a row one word longer must degrade honestly rather than run off
- * the canvas: a chip drawn past the edge is also a chip the pointer cannot reach. */
-#define CHIP_ROW_RESERVE 56
-/* Kept free at the right end of the item strip so the "and N more" chip always has
- * somewhere to go. Four glyphs is the widest it ever gets: a plus and two digits. */
-#define COUNTER_RESERVE 60
 
 /* Band geometry is decided per frame, not fixed here. The system bands grow down from
  * the top, the play bands grow up from the bottom, and the description takes whatever
@@ -70,38 +50,6 @@
 #define TYPE_CPS 45                /* characters a second while the answer types */
 #define PARA_MAX 4096
 #define MAX_CHOICES 16
-#define ROWS_MAX 32
-#define LABEL_MAX 48
-
-#define HIT_SAVE 0
-#define HIT_LOAD 1
-#define HIT_EXIT 2
-#define HIT_WORD 3
-#define HIT_CANCEL 4
-#define HIT_NEW 5
-
-#define C_BG IO_RGB(20, 22, 27)
-#define C_BAND IO_RGB(29, 32, 39)
-#define C_FIELD IO_RGB(20, 21, 26)
-#define C_INK IO_RGB(224, 222, 216)
-#define C_DIM IO_RGB(150, 154, 164)
-#define C_NAME IO_RGB(238, 226, 196)
-#define C_CHIP IO_RGB(48, 52, 62)
-#define C_CHIP_ON IO_RGB(72, 102, 86)
-#define C_QUIT IO_RGB(96, 48, 48)
-#define C_RULE IO_RGB(56, 58, 68)
-#define C_CARET IO_RGB(226, 200, 140)
-/* What the eye is meant to catch: text that turned up because of what the player just
- * did. Warm against the cold ink, and dark enough to keep reading at length. */
-#define C_HOT IO_RGB(255, 196, 108)
-
-/* A run of the description to draw in the accent colour. Byte offsets into the text the
- * band is drawing, which is what lets a highlight survive rewrapping: the run is
- * marked in the source text and the row drawer finds it wherever it lands. */
-typedef struct Span {
-    uint32_t off;
-    uint32_t len;
-} Span;
 
 
 
@@ -219,7 +167,7 @@ static size_t block_text(const Game *g, size_t from, size_t to, char *out, size_
 /* Splits off the first visual row that fits in max_w and reports where the next
  * one starts. The break goes after the last space that fits, so words stay whole;
  * a single word wider than the row overhangs rather than being cut. */
-static uint32_t wrap_row(const TextFont *f, const char *t, uint32_t len,
+uint32_t ui_wrap_row(const TextFont *f, const char *t, uint32_t len,
                          int32_t max_w, uint32_t *rest) {
     uint32_t i = 0;
     uint32_t cut = 0;
@@ -291,7 +239,7 @@ static void text_top(IoCtx *c, const TextFont *f, int32_t top, int32_t width,
     r.n = 0;
     while (left > 0 && r.n < ROWS_MAX) {
         uint32_t rest = 0;
-        (void)wrap_row(f, t, left, width, &rest);
+        (void)ui_wrap_row(f, t, left, width, &rest);
         if (rest == r.at[r.n]) {
             break;
         }
@@ -333,7 +281,7 @@ static double text_tail(IoCtx *c, const TextFont *f, int32_t top, int fit, int32
     r.n = 0;
     while (left > 0 && r.n < ROWS_MAX) {
         uint32_t rest = 0;
-        (void)wrap_row(f, full, left, width, &rest);
+        (void)ui_wrap_row(f, full, left, width, &rest);
         /* Only "no progress" ends the split. Comparing the row's byte count against
          * r.at[r.n], an absolute offset that grows with every row, looks like a guard
          * and is not one: it fires the moment two neighbouring rows happen to be the
@@ -453,7 +401,7 @@ static void text_at(IoCtx *c, const TextFont *f, int32_t x, int32_t top,
  * place that turns them back into spaces: that is a display concern. */
 /* The same for a bare script, so the auditor measures labels without inventing a Ui
  * just to borrow this. One implementation, two callers. */
-static uint32_t chip_label_sym(const Script *s, Sym sym, char *out, size_t cap) {
+uint32_t ui_chip_label_sym(const Script *s, Sym sym, char *out, size_t cap) {
     size_t len;
     const char *name = script_sym(s, sym, &len);
     size_t i;
@@ -466,13 +414,14 @@ static uint32_t chip_label_sym(const Script *s, Sym sym, char *out, size_t cap) 
     return (uint32_t)n;
 }
 
-static int32_t rows_of(const TextFont *f, const char *t, uint32_t len, int32_t width);
+int32_t ui_rows_of(const TextFont *f, const char *t, uint32_t len,
+                     int32_t width);
 
-static uint32_t chip_label(const Ui *ui, Sym sym, char *out, size_t cap) {
-    return chip_label_sym(ui->script, sym, out, cap);
+uint32_t ui_chip_label(const Ui *ui, Sym sym, char *out, size_t cap) {
+    return ui_chip_label_sym(ui->script, sym, out, cap);
 }
 
-static int32_t chip_w(const TextFont *f, const char *label, uint32_t len) {
+int32_t ui_chip_w(const TextFont *f, const char *label, uint32_t len) {
     return text_width(f, label, len) + 2 * CHIP_PAD_X;
 }
 
@@ -486,7 +435,7 @@ static int32_t draw_button(IoCtx *c, Ui *ui, const TextFont *f, int32_t right,
                            int32_t top, int32_t h, const char *label, size_t cap,
                            IoColor bg, int kind) {
     uint32_t len = (uint32_t)(cap - 1);
-    int32_t w = chip_w(f, label, len);
+    int32_t w = ui_chip_w(f, label, len);
     int32_t x = right - w;
     IoRect r = { x, top, w, h };
 
@@ -529,8 +478,8 @@ static int32_t chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size
     size_t i;
 
     for (i = 0; i < n; i++) {
-        uint32_t len = chip_label(ui, syms[i], label, sizeof label);
-        int32_t w = chip_w(f, label, len);
+        uint32_t len = ui_chip_label(ui, syms[i], label, sizeof label);
+        int32_t w = ui_chip_w(f, label, len);
 
         if (chip_wraps(x, w)) {
             rows++;
@@ -539,7 +488,7 @@ static int32_t chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size
         x += w + CHIP_GAP;
     }
     if (trailing != NULL) {
-        int32_t w = chip_w(f, trailing, (uint32_t)strlen(trailing));
+        int32_t w = ui_chip_w(f, trailing, (uint32_t)strlen(trailing));
 
         if (chip_wraps(x, w)) {
             rows++;
@@ -560,8 +509,8 @@ static int32_t draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
     size_t i;
 
     for (i = 0; i < n; i++) {
-        uint32_t len = chip_label(ui, syms[i], label, sizeof label);
-        int32_t w = chip_w(f, label, len);
+        uint32_t len = ui_chip_label(ui, syms[i], label, sizeof label);
+        int32_t w = ui_chip_w(f, label, len);
 
         if (chip_wraps(x, w)) {
             rows++;
@@ -581,7 +530,7 @@ static int32_t draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
     }
     if (trailing != NULL) {
         uint32_t len = (uint32_t)strlen(trailing);
-        int32_t w = chip_w(f, trailing, len);
+        int32_t w = ui_chip_w(f, trailing, len);
 
         if (chip_wraps(x, w)) {
             rows++;
@@ -634,7 +583,7 @@ static void note_room_fragments(Ui *ui, const Game *g);
 /* Works out which fragments the last command brought in, so the description can point
  * at them. Called once per action, not per frame: the highlight is meant to sit there
  * until the player does something else. */
-static void mark_new_fragments(Ui *ui, const Game *g) {
+void ui_mark_new_fragments(Ui *ui, const Game *g) {
     char buf[PARA_MAX];
     FragSpan sp[FRAG_MAX];
     size_t n = 0;
@@ -768,7 +717,7 @@ static Layout compute_layout(Ui *ui, const char *desc, uint32_t desc_len,
      * text gets the height of that text. */
     (void)desc_len;
     desc_n = (desc != NULL && desc[0] != '\0')
-                 ? rows_of(f, desc, (uint32_t)strlen(desc), GAME_W - 2 * MARGIN_X)
+                 ? ui_rows_of(f, desc, (uint32_t)strlen(desc), GAME_W - 2 * MARGIN_X)
                  : 0;
     {
         int32_t want = desc_n * f->line_height + 2 * PAD;
@@ -786,7 +735,7 @@ static Layout compute_layout(Ui *ui, const char *desc, uint32_t desc_len,
     /* The answer takes what is left, and it is the one that gives: it already scrolls
      * its tail, so a short band costs the reader a scroll and a clipped description
      * costs them the room. */
-    rows = (ans_n > 0) ? rows_of(f, ans, ans_n, GAME_W - 2 * MARGIN_X) : 1;
+    rows = (ans_n > 0) ? ui_rows_of(f, ans, ans_n, GAME_W - 2 * MARGIN_X) : 1;
     L.resp_h = yb - L.desc_y - L.desc_h;
     (void)rows;
     if (L.resp_h < rows * f->line_height + 2 * PAD) {
@@ -819,7 +768,7 @@ static int32_t draw_slots(Ui *ui, IoCtx *c, const TextFont *f, int32_t x, int32_
     size_t i;
 
     for (i = 0; i < filled; i++) {
-        uint32_t len = chip_label(ui, slot[i], label, sizeof label);
+        uint32_t len = ui_chip_label(ui, slot[i], label, sizeof label);
 
         x = draw_tile(c, f, x, y, label, len, 1);
     }
@@ -1125,90 +1074,94 @@ static void draw(Ui *ui) {
 
     /* The strip of what the player is carrying. A flag whose name starts with an
      * underscore is state rather than a thing, and the underscore is the only marker
-     * the format has, so it is the whole test. */
+     * the format has, so it is the whole test.
+     *
+     * It used to hide the overflow behind a "+N" chip, and that was the wrong choice:
+     * the player was told how many things he was not looking at, which is the one piece
+     * of information worth the least, and never told which. Now everything stays on the
+     * strip and the names are shortened instead, longest first, with a dot for the mark.
+     * A name he can read is worth more than a name he can read in full. */
     {
         int32_t x = MARGIN_X;
-        char label[64];
-        size_t shown = 0;
-        size_t total = 0;
+        char label[ITEM_MAX][LABEL_MAX];
+        uint32_t len[ITEM_MAX];
+        size_t count = 0;
+        size_t rounds;
+        size_t k;
 
-        /* Counted first, so the strip knows whether it is going to have to say so. */
-        for (i = 0; i < game_flag_count(g); i++) {
+        for (i = 0; i < game_flag_count(g) && count < ITEM_MAX; i++) {
             size_t l2 = 0;
-
-            if (!game_flag_on(g, i)) {
-                continue;
-            }
-            if (game_flag_name(g, i, &l2)[0] == '_') {
-                continue;
-            }
-            total++;
-        }
-        for (i = 0; i < game_flag_count(g); i++) {
-            uint32_t len;
             const char *name;
 
             if (!game_flag_on(g, i)) {
                 continue;
             }
-            name = game_flag_name(g, i, (size_t *)&len);
-            if (len == 0 || name[0] == '_') {
+            name = game_flag_name(g, i, &l2);
+            if (l2 == 0 || name[0] == '_') {
                 continue;
             }
-            {
-                uint32_t k;
-                uint32_t n = (len < sizeof label - 1) ? len : (uint32_t)sizeof label - 1;
-
-                for (k = 0; k < n; k++) {
-                    label[k] = (name[k] == '_') ? ' ' : name[k];
-                }
-                len = n;
+            for (k = 0; k < l2 && k < LABEL_MAX - 2; k++) {
+                label[count][k] = (name[k] == '_') ? ' ' : name[k];
             }
-            {
-                /* Room is kept back for the "and N more" chip from the start. Without
-                 * that reserve the leftovers simply vanish: fifteen carried things fit
-                 * six across, and a strip that quietly drops nine of them is worse than
-                 * one that admits it cannot show them. */
-                int32_t need = (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X;
-
-                if (x + need + COUNTER_RESERVE > GAME_W - MARGIN_X) {
-                    break;
-                }
-            }
-            io_fill_rect(c, (IoRect){ x, L.items_y + 3, (int32_t)text_width(f, label, len) +
-                                     2 * CHIP_PAD_X, L.items_h - 6 }, C_CHIP);
-            text_at(c, f, x + CHIP_PAD_X, L.items_y + 3 + (L.items_h - 6 - f->line_height) / 2,
-                    label, len, C_DIM);
-            x += (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X + CHIP_GAP;
-            shown++;
+            label[count][k] = '\0';
+            len[count] = (uint32_t)k;
+            count++;
         }
-        if (shown < total) {
-            char more[16];
-            uint32_t n = 0;
-            size_t k;
-            static const char plus[] = "+";
 
-            for (k = 0; k < sizeof plus - 1 && n < sizeof more - 3; k++) {
-                more[n++] = plus[k];
+        /* Shorten the longest name until the row fits. Longest first is what makes it
+         * fair: every name loses about the same rather than one losing all of its own.
+         * Each round cuts one character off the longest and marks it with a dot. */
+        for (rounds = 0;; rounds++) {
+            int32_t total = 0;
+            int32_t worst = -1;
+            size_t worst_chars = 0;
+
+            for (k = 0; k < count; k++) {
+                size_t chars = utf8_length((const uint8_t *)label[k], len[k]);
+
+                total += (int32_t)text_width(f, label[k], len[k]) + 2 * CHIP_PAD_X +
+                         CHIP_GAP;
+                if (chars > worst_chars && chars > ITEM_MIN_CHARS) {
+                    worst_chars = chars;
+                    worst = (int32_t)k;
+                }
             }
-            /* Two digits is enough for any list that fits on a screen at all. */
-            if (total - shown >= 10) {
-                more[n++] = (char)('0' + (total - shown) / 10);
+            if (count == 0 || total - CHIP_GAP <= GAME_W - 2 * MARGIN_X || worst < 0) {
+                break;
             }
-            more[n++] = (char)('0' + (total - shown) % 10);
             {
-                int32_t cw = (int32_t)text_width(f, more, n) + 2 * CHIP_PAD_X;
-                int32_t cx = GAME_W - MARGIN_X - cw;
+                /* Two characters go, and the dot stands in for one of them: a name that
+                 * loses a character and gains a dot has not got shorter, and a loop
+                 * that waits for the row to fit waits forever. */
+                size_t keep = worst_chars - 2;
+                size_t cut = utf8_offset((const uint8_t *)label[worst], len[worst], keep);
 
-                io_fill_rect(c, (IoRect){ cx, L.items_y + 3, cw, L.items_h - 6 }, C_CHIP);
-                text_at(c, f, cx + CHIP_PAD_X,
-                        L.items_y + 3 + (L.items_h - 6 - f->line_height) / 2, more, n, C_DIM);
+                label[worst][cut++] = '.';
+                label[worst][cut] = '\0';
+                len[worst] = (uint32_t)cut;
+            }
+            if (++rounds > ITEM_MAX * 64) {
+                /* Belt and braces. Every round shortens the longest name by one
+                 * character, so this cannot be reached; a game hanging on a strip of
+                 * carried things is far worse than a strip that does not quite fit. */
+                break;
             }
         }
-        if (total == 0) {
-            /* Nothing carried. Not "shown == 0", because a list too long for the
-             * strip shows zero chips and a counter, and that is not emptiness. */
+
+        for (k = 0; k < count; k++) {
+            int32_t w = (int32_t)text_width(f, label[k], len[k]) + 2 * CHIP_PAD_X;
+
+            io_fill_rect(c, (IoRect){ x, L.items_y + 3, w, L.items_h - 6 }, C_CHIP);
+            text_at(c, f, x + CHIP_PAD_X,
+                    L.items_y + 3 + (L.items_h - 6 - f->line_height) / 2,
+                    label[k], len[k], C_DIM);
+            x += w + CHIP_GAP;
+        }
+        if (count == 0) {
+            /* Nothing carried. Not "nothing drawn": a strip whose names were all
+             * shortened still has something on it. */
             static const char empty[] = "пусто";
+
             text_at(c, f, x, L.items_y + (L.items_h - f->line_height) / 2, empty,
                     (uint32_t)(sizeof empty - 1), C_DIM);
         }
@@ -1228,7 +1181,7 @@ static void draw(Ui *ui) {
         /* Bottom anchored: the answer belongs next to the commands it produced, and the
          * slack reads as a gap under the description rather than a hole above them. */
         {
-            int32_t rows = rows_of(f, para, (uint32_t)n, GAME_W - 2 * MARGIN_X);
+            int32_t rows = ui_rows_of(f, para, (uint32_t)n, GAME_W - 2 * MARGIN_X);
 
             if (rows < fit) {
                 top = L.resp_y + L.resp_h - PAD - rows * f->line_height;
@@ -1278,7 +1231,7 @@ static void draw(Ui *ui) {
  *
  * It runs on the test backend: no window, no events, only the framebuffer. */
 
-#define WALK_MAX_SEEN 8192
+#define WALK_MAX_SEEN 262144
 
 /* One queue entry per state, holding the command that reached it and the entry it came
  * from. Breadth first, so the first win found is the shortest route there is, and a
@@ -1430,7 +1383,7 @@ static void dump_ppm(const char *path, const uint32_t *px, int w, int h) {
  * every flag without an underscore at once. So the audit walks the script, not the state
  * graph, which is both faster and immune to whatever the graph walk was doing.
  *
- * Every width goes through the same chip_w and text_width the drawing uses, so a row
+ * Every width goes through the same ui_chip_w and text_width the drawing uses, so a row
  * reported as fitting here fits on screen. */
 
 typedef struct Worst {
@@ -1446,13 +1399,13 @@ static void keep_worst(Worst *w, int32_t v, const char *what) {
 }
 
 /* How many lines a paragraph takes at this width: the same greedy wrap as the drawing. */
-static int32_t rows_of(const TextFont *f, const char *t, uint32_t len, int32_t width) {
+int32_t ui_rows_of(const TextFont *f, const char *t, uint32_t len, int32_t width) {
     uint32_t left = len;
     int32_t rows = 0;
 
     while (left > 0 && rows < 256) {
         uint32_t rest = 0;
-        (void)wrap_row(f, t, left, width, &rest);
+        (void)ui_wrap_row(f, t, left, width, &rest);
         if (rest == 0) {
             break;
         }
@@ -1471,7 +1424,7 @@ static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
     size_t i;
 
     for (i = 0; i < n; i++) {
-        uint32_t len = chip_label_sym(s, syms[i], label, sizeof label);
+        uint32_t len = ui_chip_label_sym(s, syms[i], label, sizeof label);
 
         x += (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X + CHIP_GAP;
     }
@@ -1562,7 +1515,7 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
                 }
             }
             desc_rows_room = (rn > 0)
-                                 ? rows_of(f, room_para, (uint32_t)strlen(room_para),
+                                 ? ui_rows_of(f, room_para, (uint32_t)strlen(room_para),
                                            usable)
                                  : 0;
             if (desc_rows_room > fit_desc) {
@@ -1630,7 +1583,7 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
                 n += take;
             }
         }
-        keep_worst(&w_desc, rows_of(f, para, n, usable), what);
+        keep_worst(&w_desc, ui_rows_of(f, para, n, usable), what);
 
         /* Responses: the longest text any rule of this room can print. */
         for (j = 0; j < r->rule_len; j++) {
@@ -1639,7 +1592,7 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
             if (ru->act.text_len == 0) {
                 continue;
             }
-            keep_worst(&w_resp, rows_of(f, ru->act.text, ru->act.text_len, usable), what);
+            keep_worst(&w_resp, ui_rows_of(f, ru->act.text, ru->act.text_len, usable), what);
         }
     }
 
@@ -1654,7 +1607,7 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
             if (script_sym(s, (Sym)i, &l2)[0] == '_') {
                 continue;
             }
-            uint32_t len = chip_label_sym(s, (Sym)i, label, sizeof label);
+            uint32_t len = ui_chip_label_sym(s, (Sym)i, label, sizeof label);
 
             x += (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X + CHIP_GAP;
         }
@@ -1743,7 +1696,19 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
         g_head++;
     }
     if (g_win < 0) {
-        fprintf(stderr, "этим скриптом нельзя выиграть\n");
+        /* Two different facts, and they must not be reported as one. Running out of room
+         * is not the same as there being nothing to find, and saying "cannot win" after
+         * simply giving up is a confident falsehood: it is what made a grown script look
+         * broken when the only thing that had happened was that the search got slower
+         * than the box it ran in. */
+        if (g_nodes_n >= WALK_MAX_SEEN) {
+            fprintf(stderr, "победа не найдена: обход дошёл до предела в %zu состояний. "
+                            "Это не значит, что её нет — нужен больший предел\n",
+                    (size_t)WALK_MAX_SEEN);
+        } else {
+            fprintf(stderr, "этим скриптом нельзя выиграть: перебраны все %zu состояний\n",
+                    g_nodes_n);
+        }
         return 3;
     }
 
@@ -1815,7 +1780,7 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
             int at = node_at_depth(g_win, steps - step - 1);
 
             game_command(g, g_nodes[at].words, (size_t)g_nodes[at].word_len);
-            mark_new_fragments(ui, g);
+            ui_mark_new_fragments(ui, g);
         }
     }
     printf("кадров записано: %d\n", steps + 2);
@@ -2141,7 +2106,7 @@ int main(int argc, char **argv) {
                         /* Whatever the command brought into the room description is
                          * what the player should notice, so it is marked here and
                          * stays marked until they do something else. */
-                        mark_new_fragments(&ui, &game);
+                        ui_mark_new_fragments(&ui, &game);
                         ui.last = ui.cmd;
                         ui.have_last = 1;
                         ui.cmd.filled = 0;
