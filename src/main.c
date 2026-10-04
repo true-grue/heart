@@ -673,6 +673,8 @@ static size_t gather_pick(Ui *ui, Sym *choices, size_t cap) {
     return n;
 }
 
+static void note_room_fragments(Ui *ui, const Game *g);
+
 /* Works out which fragments the last command brought in, so the description can point
  * at them. Called once per action, not per frame: the highlight is meant to sit there
  * until the player does something else. */
@@ -682,6 +684,14 @@ static void mark_new_fragments(Ui *ui, const Game *g) {
     size_t i;
     size_t j;
 
+    /* A command that walks into another room did not bring that room into being. Every
+     * fragment in it is new to the player and none of it is news, so the baseline is
+     * recorded and nothing is marked. Without this the whole new room lights up. */
+    if (g->room != ui->last_room) {
+        ui->last_room = g->room;
+        note_room_fragments(ui, g);
+        return;
+    }
     ui->frag_hot_n = 0;
     if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX) == 0) {
         return;
@@ -1019,6 +1029,20 @@ static void draw(Ui *ui) {
 
     ui->hit_n = 0;
 
+    /* Before anything is drawn, not after: the description reads the marks, so a reset
+     * that lands below it leaves the frame that enters a room drawn in the previous
+     * room's colours. The room then looks briefly wrong and corrects itself on the next
+     * redraw, which reads as a flicker on a mouse move. */
+    /* Compared as the room symbol, not as the log index last_block returns. The two
+     * are different numbers, and mixing them makes "the room changed" true almost every
+     * frame, which both repaints the old colours and stops anything being marked. */
+    if ((size_t)g->room != ui->last_room) {
+        ui->last_room = (size_t)g->room;
+        note_room_fragments(ui, g);
+        ui->dscroll = 0.0;
+        ui->dscroll_want = 0.0;
+    }
+
     io_fill_rect(c, (IoRect){ 0, 0, GAME_W, GAME_H }, C_BG);
 
     /* Bands first, contents after. The geometry is decided from the text this frame is
@@ -1114,14 +1138,6 @@ static void draw(Ui *ui) {
     /* A new room means a new description, and the scroll starts at its head again.
      * Keyed on the room rather than on the click, so loading and starting a new game
      * reset it too. */
-    if (room != ui->last_room) {
-        ui->last_room = room;
-        /* A room just walked into is not news about itself, so nothing in it lights up;
-         * what lights up is what turns up later, while the player stays here. */
-        note_room_fragments(ui, g);
-        ui->dscroll = 0.0;
-        ui->dscroll_want = 0.0;
-    }
 
     /* command band */
     (void)layout_commands(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
