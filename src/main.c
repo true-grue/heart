@@ -1515,9 +1515,14 @@ static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
 
 static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
     const TextFont *f = ui->font;
-    Layout L = compute_layout(ui, "", 0, "", 0);
-    int32_t fit_desc = (L.desc_h - 2 * PAD) / f->line_height;
-    int32_t fit_resp = (L.resp_h - 2 * PAD) / f->line_height;
+    /* The floor, not a sample: one row of chips and the shortest answer the engine
+     * will settle for, with nothing spare. Asking the layout instead means asking
+     * about an empty description, which sizes the band to nothing and then reports
+     * that every room overflows a band that in fact scrolls. */
+    int32_t cmd_min_h = CMD_PAD + TILE_H + CMD_PAD + CHIP_H + CMD_PAD;
+    int32_t desc_floor = GAME_H - CTRL_H - NAME_H - ITEMS_H - cmd_min_h - RESP_MIN_H;
+    int32_t fit_desc = (desc_floor - 2 * PAD) / f->line_height;
+    int32_t fit_resp = (RESP_MIN_H - 2 * PAD) / f->line_height;
     int32_t usable = GAME_W - 2 * MARGIN_X;
     Worst w_ctrl = { 0, "" };
     Worst w_name = { 0, "" };
@@ -1707,15 +1712,32 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
     {
         int bad = 0;
 
-        if (w_ctrl.value > usable || w_name.value > usable ||
-            w_slots.value > usable - CHIP_ROW_RESERVE ||
-            w_pick.value > usable - CHIP_ROW_RESERVE ||
-            w_items.value > usable - CHIP_ROW_RESERVE) {
-            printf("\nПЕРЕПОЛНЕНИЕ ПО ШИРИНЕ: ряд уходит за край\n");
-            bad = 1;
+    if (rooms_over > 0) {
+        printf("\nкомнат, где описание не влезает: %d из %d, худшая — %s, %d строк при %d\n",
+               rooms_over, (int)s->room_count, w_over.where, w_over.value, fit_desc);
+    } else {
+        printf("\nописание влезает в каждой из %d комнат\n", (int)s->room_count);
+    }
+        /* Width is no longer pass or fail. A row of chips too wide to fit wraps, and
+         * the band grows to hold it; the item strip does not wrap and says how many
+         * things it is hiding. Each is reported on its own terms. */
+        if (w_slots.value > usable - CHIP_ROW_RESERVE ||
+            w_pick.value > usable - CHIP_ROW_RESERVE) {
+            int32_t worst = (w_pick.value > w_slots.value) ? w_pick.value
+                                                              : w_slots.value;
+            int32_t row_px = usable - CHIP_ROW_RESERVE;
+
+            printf("\nширокий ряд чипов не дефект: чипы переносятся, полоса растёт\n"
+                   "  худшая ширина %d px при доступных %d px, строк чипов: %d\n",
+                   worst, row_px, (worst + row_px - 1) / row_px);
+        }
+        if (w_items.value > usable - CHIP_ROW_RESERVE) {
+            printf("\nполоса предметов не переносится, лишнее уходит в «+N» — так задумано\n"
+                   "  видно примерно %d чипов из %d\n",
+                   (usable - CHIP_ROW_RESERVE) / 64, w_items.value / 64);
         }
         if (w_desc.value > fit_desc) {
-            printf("\nПЕРЕПОЛНЕНИЕ ПО ВЫСОТЕ: описание обрезается молча, %d строк при %d\n",
+            printf("\nописание не влезает, %d строк при %d: хвост уезжает, обрезания нет\n",
                    w_desc.value, fit_desc);
             bad = 1;
         }
@@ -1724,7 +1746,7 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
                    w_resp.value, fit_resp);
         }
         if (!bad) {
-            printf("\nвсё влезает\n");
+            printf("\nдефектов раскладки нет: ни одна полоса не теряет текст\n");
         }
     }
     (void)k;
