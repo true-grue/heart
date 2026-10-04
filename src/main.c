@@ -41,6 +41,9 @@
 #define CHIP_H 44                  /* a verb or object chip */
 #define CHIP_GAP 8
 #define CHIP_PAD_X 12
+/* Kept free at the right end of the item strip so the "and N more" chip always has
+ * somewhere to go. Four glyphs is the widest it ever gets: a plus and two digits. */
+#define COUNTER_RESERVE 60
 
 #define CTRL_Y 0
 #define CTRL_H 30
@@ -758,7 +761,21 @@ static void draw(Ui *ui) {
     {
         int32_t x = MARGIN_X;
         char label[64];
+        size_t shown = 0;
+        size_t total = 0;
 
+        /* Counted first, so the strip knows whether it is going to have to say so. */
+        for (i = 0; i < game_flag_count(g); i++) {
+            size_t l2 = 0;
+
+            if (!game_flag_on(g, i)) {
+                continue;
+            }
+            if (game_flag_name(g, i, &l2)[0] == '_') {
+                continue;
+            }
+            total++;
+        }
         for (i = 0; i < game_flag_count(g); i++) {
             uint32_t len;
             const char *name;
@@ -779,17 +796,50 @@ static void draw(Ui *ui) {
                 }
                 len = n;
             }
-            if (x + (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X >
-                GAME_W - MARGIN_X) {
-                break;
+            {
+                /* Room is kept back for the "and N more" chip from the start. Without
+                 * that reserve the leftovers simply vanish: fifteen carried things fit
+                 * six across, and a strip that quietly drops nine of them is worse than
+                 * one that admits it cannot show them. */
+                int32_t need = (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X;
+
+                if (x + need + COUNTER_RESERVE > GAME_W - MARGIN_X) {
+                    break;
+                }
             }
             io_fill_rect(c, (IoRect){ x, ITEMS_Y + 3, (int32_t)text_width(f, label, len) +
                                      2 * CHIP_PAD_X, ITEMS_H - 6 }, C_CHIP);
             text_at(c, f, x + CHIP_PAD_X, ITEMS_Y + 3 + (ITEMS_H - 6 - f->line_height) / 2,
                     label, len, C_DIM);
             x += (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X + CHIP_GAP;
+            shown++;
         }
-        if (x == MARGIN_X) {
+        if (shown < total) {
+            char more[16];
+            uint32_t n = 0;
+            size_t k;
+            static const char plus[] = "+";
+
+            for (k = 0; k < sizeof plus - 1 && n < sizeof more - 3; k++) {
+                more[n++] = plus[k];
+            }
+            /* Two digits is enough for any list that fits on a screen at all. */
+            if (total - shown >= 10) {
+                more[n++] = (char)('0' + (total - shown) / 10);
+            }
+            more[n++] = (char)('0' + (total - shown) % 10);
+            {
+                int32_t cw = (int32_t)text_width(f, more, n) + 2 * CHIP_PAD_X;
+                int32_t cx = GAME_W - MARGIN_X - cw;
+
+                io_fill_rect(c, (IoRect){ cx, ITEMS_Y + 3, cw, ITEMS_H - 6 }, C_CHIP);
+                text_at(c, f, cx + CHIP_PAD_X,
+                        ITEMS_Y + 3 + (ITEMS_H - 6 - f->line_height) / 2, more, n, C_DIM);
+            }
+        }
+        if (total == 0) {
+            /* Nothing carried. Not "shown == 0", because a list too long for the
+             * strip shows zero chips and a counter, and that is not emptiness. */
             static const char empty[] = "пусто";
             text_at(c, f, x, ITEMS_Y + (ITEMS_H - f->line_height) / 2, empty,
                     (uint32_t)(sizeof empty - 1), C_DIM);
