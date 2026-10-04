@@ -50,30 +50,18 @@
  * somewhere to go. Four glyphs is the widest it ever gets: a plus and two digits. */
 #define COUNTER_RESERVE 60
 
-#define CTRL_Y 0
+/* Band geometry is decided per frame, not fixed here. The system bands grow down from
+ * the top, the play bands grow up from the bottom, and the description takes whatever
+ * is left between them, so no band is taller than its content and nothing is reserved
+ * that goes unused. The answer is the one that gives way when a frame holds more than
+ * the canvas has room for: it already scrolls its tail, so shrinking it costs least. */
 #define CTRL_H 30
-#define NAME_Y (CTRL_Y + CTRL_H)
 #define NAME_H 32
-#define DESC_Y (NAME_Y + NAME_H)
-#define DESC_H 130
-#define CMD_Y (DESC_Y + DESC_H)
-#define CMD_H 100
-/* The command band is the only one whose height is decided by content: the word chips
- * wrap onto as many rows as they need, and the description takes what is left. Fixed
- * heights were the wrong shape here, and computing a worst case per game is worse still,
- * because the worst case is not a state any player reaches. */
-#define CMD_MIN_H 100
-#define CMD_CHIP_H 34
-#define DESC_MIN_H 72
-#define RESP_MIN_H 96
 #define ITEMS_H 26                   /* the strip of carried things */
-#define RESP_Y (CMD_Y + CMD_H)
-#define RESP_H (GAME_H - RESP_Y - ITEMS_H)
-#define ITEMS_Y (RESP_Y + RESP_H)
-
+#define CMD_PAD 8
+#define DESC_MIN_H 56                /* below this the description stops being read */
+#define RESP_MIN_H 60
 #define TILE_H 36                     /* one slot in the command line */
-#define TILE_Y (CMD_Y + 8)
-#define PICK_Y (CMD_Y + 8 + TILE_H + 8)
 /* The most words one command can have, and so the most slots the palette needs.
  * Equals RULE_MAX_WORDS: a command the screen cannot show is a command the player
  * cannot type. */
@@ -454,6 +442,8 @@ static uint32_t chip_label_sym(const Script *s, Sym sym, char *out, size_t cap) 
     return (uint32_t)n;
 }
 
+static int32_t rows_of(const TextFont *f, const char *t, uint32_t len, int32_t width);
+
 static uint32_t chip_label(const Ui *ui, Sym sym, char *out, size_t cap) {
     return chip_label_sym(ui->script, sym, out, cap);
 }
@@ -468,53 +458,6 @@ static int32_t chip_w(const TextFont *f, const char *label, uint32_t len) {
  * replaced by a "+N" chip rather than being drawn where the player cannot click it.
  * Room for that chip is reserved from the first chip on, otherwise the row fills the
  * width completely and there is nowhere left to admit the loss. */
-static size_t draw_chip_row(IoCtx *c, Ui *ui, const TextFont *f, int32_t y, int32_t h,
-                            const Sym *syms, size_t n, int kind, int32_t *end_x) {
-    int32_t x = MARGIN_X;
-    char label[64];
-    size_t i;
-    size_t shown = 0;
-
-    for (i = 0; i < n; i++) {
-        uint32_t len = chip_label(ui, syms[i], label, sizeof label);
-        int32_t w = chip_w(f, label, len);
-        IoRect r;
-
-        if (x + w + CHIP_ROW_RESERVE > GAME_W - MARGIN_X) {
-            break;
-        }
-        r.x = x;
-        r.y = y;
-        r.w = w;
-        r.h = h;
-        io_fill_rect(c, r, C_CHIP);
-        io_fill_rect(c, (IoRect){ r.x, r.y, r.w, 1 }, C_RULE);
-        text_at(c, f, r.x + CHIP_PAD_X, r.y + (h - f->line_height) / 2, label, len, C_INK);
-        add_hit(ui, r, kind, syms[i]);
-        x += w + CHIP_GAP;
-        shown++;
-    }
-    if (end_x != NULL) {
-        *end_x = x;
-    }
-    if (shown < n) {
-        char more[8];
-        uint32_t len = 0;
-        int32_t w;
-
-        more[len++] = '+';
-        if (n - shown >= 10) {
-            more[len++] = (char)('0' + (size_t)(n - shown) / 10u);
-        }
-        more[len++] = (char)('0' + (size_t)(n - shown) % 10u);
-        w = chip_w(f, more, len);
-        x = GAME_W - MARGIN_X - w;
-        io_fill_rect(c, (IoRect){ x, y, w, h }, C_CHIP);
-        text_at(c, f, x + CHIP_PAD_X, y + (h - f->line_height) / 2, more, len, C_DIM);
-    }
-    return shown;
-}
-
 static int32_t draw_button(IoCtx *c, Ui *ui, const TextFont *f, int32_t right,
                            int32_t top, int32_t h, const char *label, size_t cap,
                            IoColor bg, int kind) {
@@ -529,13 +472,10 @@ static int32_t draw_button(IoCtx *c, Ui *ui, const TextFont *f, int32_t right,
     return x - CHIP_GAP;
 }
 
-/* Draws one slot of the command line and returns its right edge. A filled slot is
- * a chip; the slot being chosen is an empty outline, which is the only place the
- * player can still change their mind about that part. */
-static int32_t draw_tile(IoCtx *c, const TextFont *f, int32_t x, const char *label,
-                         uint32_t len, int filled) {
+static int32_t draw_tile(IoCtx *c, const TextFont *f, int32_t x, int32_t y,
+                         const char *label, uint32_t len, int filled) {
     int32_t w = text_width(f, label, len) + 2 * CHIP_PAD_X;
-    IoRect r = { x, TILE_Y, w, TILE_H };
+    IoRect r = { x, y, w, TILE_H };
 
     io_fill_rect(c, r, filled ? C_CHIP_ON : C_FIELD);
     io_fill_rect(c, (IoRect){ r.x, r.y, r.w, 1 }, filled ? C_CHIP_ON : C_RULE);
@@ -547,86 +487,237 @@ static int32_t draw_tile(IoCtx *c, const TextFont *f, int32_t x, const char *lab
     return x + w + CHIP_GAP;
 }
 
-/* The command band: the sentence so far on top, and below it the choices for the
- * slot being filled. The slots appear left to right as they are chosen. */
-static void layout_commands(Ui *ui) {
+/* How many rows of chips these words need at this width, measured with the same
+ * arithmetic the drawing uses so the band is never sized for one arrangement and drawn
+ * for another. The reserve at the right end is what leaves room for a "+N". */
+static int32_t chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size_t n,
+                                const char *trailing) {
+    int32_t usable = GAME_W - MARGIN_X - CHIP_ROW_RESERVE;
+    int32_t x = 0;
+    int32_t rows = 1;
+    char label[LABEL_MAX];
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        uint32_t len = chip_label(ui, syms[i], label, sizeof label);
+        int32_t w = chip_w(f, label, len);
+
+        if (x > 0 && x + CHIP_GAP + w > usable) {
+            rows++;
+            x = 0;
+        }
+        x += w + CHIP_GAP;
+    }
+    if (trailing != NULL) {
+        int32_t w = chip_w(f, trailing, (uint32_t)strlen(trailing));
+
+        if (x > 0 && x + CHIP_GAP + w > usable) {
+            rows++;
+        }
+    }
+    return rows;
+}
+
+/* Draws the words and the trailing chip as one flow that wraps, rather than as two
+ * things each remembering a position. That is what stops "назад" landing on the first
+ * word: it is placed after the last word drawn, on whichever row that turns out to be. */
+static int32_t draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
+                              const Sym *syms, size_t n, int kind,
+                              const char *trailing) {
+    int32_t usable = GAME_W - MARGIN_X - CHIP_ROW_RESERVE;
+    int32_t x = MARGIN_X;
+    int32_t rows = 1;
+    char label[LABEL_MAX];
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        uint32_t len = chip_label(ui, syms[i], label, sizeof label);
+        int32_t w = chip_w(f, label, len);
+
+        if (x > 0 && x + CHIP_GAP + w > usable) {
+            rows++;
+            x = MARGIN_X;
+            y += CHIP_H + CHIP_GAP;
+        }
+        {
+            IoRect r = { x, y, w, TILE_H };
+
+            io_fill_rect(c, r, C_CHIP);
+            io_fill_rect(c, (IoRect){ r.x, r.y, r.w, 1 }, C_RULE);
+            text_at(c, f, r.x + CHIP_PAD_X, r.y + (TILE_H - f->line_height) / 2, label,
+                    len, C_INK);
+            add_hit(ui, r, kind, syms[i]);
+        }
+        x += w + CHIP_GAP;
+    }
+    if (trailing != NULL) {
+        uint32_t len = (uint32_t)strlen(trailing);
+        int32_t w = chip_w(f, trailing, len);
+
+        if (x > 0 && x + CHIP_GAP + w > usable) {
+            rows++;
+            x = MARGIN_X;
+            y += CHIP_H + CHIP_GAP;
+        }
+        {
+            IoRect r = { x, y, w, TILE_H };
+
+            io_fill_rect(c, r, C_CHIP);
+            text_at(c, f, r.x + CHIP_PAD_X, r.y + (TILE_H - f->line_height) / 2, trailing,
+                    len, C_DIM);
+            add_hit(ui, r, HIT_CANCEL, 0);
+        }
+    }
+    return rows;
+}
+
+/* The words on offer now. One list, read by both the measurement and the drawing.
+ * A word nothing can follow is a dead end rather than an action, so it is filtered
+ * here: the source lists every verb the room mentions, and this band is the place that
+ * promises the player a choice is possible. */
+static size_t gather_pick(Ui *ui, Sym *choices, size_t cap) {
+    Sym all[MAX_CHOICES];
+    Sym tail[RULE_MAX_WORDS + 1];
+    size_t got;
+    size_t n = 0;
+    size_t i;
+
+    if (ui->cmd.filled >= CMD_SLOTS) {
+        return 0;
+    }
+    got = game_next(ui->game, ui->cmd.slot, (size_t)ui->cmd.filled, all, MAX_CHOICES);
+    for (i = 0; i < got && n < cap; i++) {
+        size_t len = (size_t)ui->cmd.filled + 1;
+
+        /* The probe needs the whole command so far, not just the word being offered,
+         * or the lookup walks off the front of the array. */
+        memcpy(tail, ui->cmd.slot, (size_t)ui->cmd.filled * sizeof tail[0]);
+        tail[ui->cmd.filled] = all[i];
+        if (game_more(ui->game, tail, len) > 0 || game_available(ui->game, tail, len)) {
+            choices[n++] = all[i];
+        }
+    }
+    return n;
+}
+
+/* Band geometry for this frame.
+ *
+ * The system bands grow down from the top, the play bands grow up from the bottom, and
+ * the description takes what is left in between: no empty space, and no band taller than
+ * its content. The answer is the one that gives way, because it already scrolls. */
+typedef struct Layout {
+    int32_t ctrl_y, ctrl_h;
+    int32_t name_y, name_h;
+    int32_t desc_y, desc_h;
+    int32_t cmd_y, cmd_h, tile_y, pick_y;
+    int32_t resp_y, resp_h;
+    int32_t items_y, items_h;
+    int32_t chip_rows;
+} Layout;
+
+static Layout compute_layout(Ui *ui, const char *ans, uint32_t ans_n) {
+    const TextFont *f = ui->font;
+    Layout L;
+    Sym choices[MAX_CHOICES];
+    const char *trailing = NULL;
+    size_t n = 0;
+    int32_t yb;
+    int32_t rows;
+
+    L.ctrl_y = 0;
+    L.ctrl_h = CTRL_H;
+    L.name_y = CTRL_H;
+    L.name_h = NAME_H;
+    L.desc_y = CTRL_H + NAME_H;
+
+    L.items_h = ITEMS_H;
+    L.items_y = GAME_H - L.items_h;
+    yb = L.items_y;
+
+    /* While the answer is still being written, the band keeps the command that caused it
+     * and offers nothing, so it needs no row of choices yet. */
+    if (!ui->done && ui->have_last) {
+        L.chip_rows = 0;
+    } else {
+        n = gather_pick(ui, choices, MAX_CHOICES);
+        if (ui->cmd.filled > 0) {
+            trailing = "назад";
+        }
+        L.chip_rows = chip_rows_needed(f, ui, choices, n, trailing);
+    }
+    L.cmd_h = CMD_PAD + TILE_H + CMD_PAD + L.chip_rows * CHIP_H +
+              (L.chip_rows > 0 ? (L.chip_rows - 1) * CHIP_GAP : 0) + CMD_PAD;
+    if (L.chip_rows == 0) {
+        L.cmd_h = CMD_PAD + TILE_H + CMD_PAD;
+    }
+    L.cmd_y = yb - L.cmd_h;
+    yb = L.cmd_y;
+    /* Absolute, not offsets inside the band: the draw calls take canvas coordinates. */
+    L.tile_y = L.cmd_y + CMD_PAD;
+    L.pick_y = L.cmd_y + CMD_PAD + TILE_H + CMD_PAD;
+
+    rows = (ans_n > 0) ? rows_of(f, ans, ans_n, GAME_W - 2 * MARGIN_X) : 1;
+    L.resp_h = rows * f->line_height + 2 * PAD;
+    if (L.resp_h < RESP_MIN_H) {
+        L.resp_h = RESP_MIN_H;
+    }
+    if (L.resp_h > yb - L.desc_y - DESC_MIN_H) {
+        L.resp_h = yb - L.desc_y - DESC_MIN_H;
+        if (L.resp_h < CMD_PAD) {
+            L.resp_h = CMD_PAD;
+        }
+    }
+    L.resp_y = L.cmd_y - L.resp_h;
+    L.desc_h = L.resp_y - L.desc_y;
+    if (L.desc_h < 0) {
+        L.desc_h = 0;
+    }
+    return L;
+}
+
+static Layout layout_commands(Ui *ui, const char *ans, uint32_t ans_n) {
     IoCtx *c = ui->ctx;
     const TextFont *f = ui->font;
     Sym choices[MAX_CHOICES];
-    Sym all[MAX_CHOICES];
     int32_t x = MARGIN_X;
-    int32_t pick_x = MARGIN_X;
     size_t n = 0;
     size_t i;
     char label[LABEL_MAX];
+    Layout L = compute_layout(ui, ans, ans_n);
 
     if (!ui->done && ui->have_last) {
-        /* While the answer is still being written, the command that caused it stays
-         * in full. Clearing the row the moment the command runs throws away the
-         * object, which is the part the player is least likely to remember. */
+        /* While the answer is still being written, the command that caused it stays in
+         * full. Clearing the row the moment the command runs throws away the object,
+         * which is the part the player is least likely to remember. */
         for (i = 0; i < (size_t)ui->last.filled; i++) {
             uint32_t len = chip_label(ui, ui->last.slot[i], label, sizeof label);
-            x = draw_tile(c, f, x, label, len, 1);
+
+            x = draw_tile(c, f, x, L.tile_y, label, len, 1);
         }
-        return;
+        return L;
     }
     for (i = 0; i < (size_t)ui->cmd.filled; i++) {
         uint32_t len = chip_label(ui, ui->cmd.slot[i], label, sizeof label);
-        x = draw_tile(c, f, x, label, len, 1);
+
+        x = draw_tile(c, f, x, L.tile_y, label, len, 1);
     }
-    /* the slot being chosen */
     {
         static const char pick[] = "?";
-        x = draw_tile(c, f, x, pick, (uint32_t)(sizeof pick - 1), 0);
+
+        x = draw_tile(c, f, x, L.tile_y, pick, (uint32_t)(sizeof pick - 1), 0);
     }
     (void)x;
 
-    if (ui->cmd.filled >= CMD_SLOTS) {
-        return;
-    }
-
-    /* The words that may come next, given what is already chosen. A word nothing can
-     * follow is a dead end rather than an action, and it is filtered here rather than
-     * at the source because the source lists every verb the room mentions, and this
-     * band is the place that promises the player a choice is possible. */
-    {
-        size_t got = game_next(ui->game, ui->cmd.slot, (size_t)ui->cmd.filled, all,
-                               MAX_CHOICES);
-
-        Sym tail[RULE_MAX_WORDS + 1];
-
-        for (i = 0; i < got && n < MAX_CHOICES; i++) {
-            size_t len = (size_t)ui->cmd.filled + 1;
-
-            /* The probe needs the whole command so far, not just the word being
-             * offered, or the lookup walks off the front of the array. */
-            memcpy(tail, ui->cmd.slot, (size_t)ui->cmd.filled * sizeof tail[0]);
-            tail[ui->cmd.filled] = all[i];
-            /* A word is worth offering if the command can go on after it, or if it
-             * ends the command right here. Only a word that is neither is a dead end,
-             * and that test belongs on the first slot alone: on the last one, finishing
-             * the sentence is exactly what the word is for. */
-            if (game_more(ui->game, tail, len) > 0 || game_available(ui->game, tail, len)) {
-                choices[n++] = all[i];
-            }
-        }
-    }
+    n = gather_pick(ui, choices, MAX_CHOICES);
     if (n == 0) {
         static const char none[] = "здесь нечего делать";
-        text_at(c, f, MARGIN_X, PICK_Y + (TILE_H - f->line_height) / 2, none,
+
+        text_at(c, f, MARGIN_X, L.pick_y + (TILE_H - f->line_height) / 2, none,
                 (uint32_t)(sizeof none - 1), C_DIM);
     }
-    (void)draw_chip_row(c, ui, f, PICK_Y, TILE_H, choices, n, HIT_WORD, &pick_x);
-    if (ui->cmd.filled > 0) {
-        static const char back[] = "назад";
-        int32_t w = chip_w(f, back, (uint32_t)(sizeof back - 1));
-        IoRect r = { pick_x, PICK_Y, w, TILE_H };
-
-        io_fill_rect(c, r, C_CHIP);
-        text_at(c, f, r.x + CHIP_PAD_X, r.y + (TILE_H - f->line_height) / 2, back,
-                (uint32_t)(sizeof back - 1), C_DIM);
-        add_hit(ui, r, HIT_CANCEL, 0);
-    }
+    (void)draw_chip_rows(c, ui, f, L.pick_y, choices, n, HIT_WORD,
+                         (ui->cmd.filled > 0) ? "назад" : NULL);
+    return L;
 }
 
 /* ------------------------------------------------------------ saves -- */
@@ -757,17 +848,35 @@ static void draw(Ui *ui) {
     const TextFont *f = ui->font;
     const Game *g = ui->game;
     char para[PARA_MAX];
+    char dpara[PARA_MAX];
     size_t room = last_block(g, 1);
     size_t cmd = last_block(g, 0);
+    size_t answer_n;
+    size_t desc_n;
     size_t i;
+    Layout L;
 
     ui->hit_n = 0;
 
     io_fill_rect(c, (IoRect){ 0, 0, GAME_W, GAME_H }, C_BG);
 
+    /* Bands first, contents after. The geometry is decided from the text this frame is
+     * about to show, and every background goes down before anything is drawn into it. */
+    answer_n = (cmd != (size_t)-1)
+                   ? block_text(g, cmd + 1, block_end(g, cmd), para, sizeof para)
+                   : 0;
+    desc_n = game_room_text(g, dpara, sizeof dpara);
+    L = compute_layout(ui, para, (uint32_t)answer_n);
+
+    band(c, L.ctrl_y, L.ctrl_h, C_BAND);
+    band(c, L.name_y, L.name_h, C_BAND);
+    band(c, L.desc_y, L.desc_h, C_FIELD);
+    band(c, L.cmd_y, L.cmd_h, C_BAND);
+    band(c, L.items_y, L.items_h, C_BAND);
+    band(c, L.resp_y, L.resp_h, C_FIELD);
+
     /* control band: the game on the left, the way out on the right */
-    band(c, CTRL_Y, CTRL_H, C_BAND);
-    text_at(c, f, MARGIN_X, CTRL_Y + (CTRL_H - f->line_height) / 2, ui->game_title,
+    text_at(c, f, MARGIN_X, L.ctrl_y + (L.ctrl_h - f->line_height) / 2, ui->game_title,
             (uint32_t)strlen(ui->game_title), C_DIM);
     {
         static const char new_label[] = "Новая игра";
@@ -778,20 +887,19 @@ static void draw(Ui *ui) {
 
         /* Laid out right to left, so the way out stays in the corner a hand goes
          * to without looking. */
-        right = draw_button(c, ui, f, right, CTRL_Y + 2, BTN_H, exit_label,
+        right = draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, exit_label,
                             sizeof exit_label, C_QUIT, HIT_EXIT);
-        right = draw_button(c, ui, f, right, CTRL_Y + 2, BTN_H, load_label,
+        right = draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, load_label,
                             sizeof load_label, C_CHIP, HIT_LOAD);
-        right = draw_button(c, ui, f, right, CTRL_Y + 2, BTN_H, save_label,
+        right = draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, save_label,
                             sizeof save_label, C_CHIP, HIT_SAVE);
-        (void)draw_button(c, ui, f, right, CTRL_Y + 2, BTN_H, new_label,
+        (void)draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, new_label,
                           sizeof new_label, C_CHIP, HIT_NEW);
     }
 
     /* name band */
-    band(c, NAME_Y, NAME_H, C_BAND);
     if (room != (size_t)-1) {
-        text_at(c, f, MARGIN_X, NAME_Y + (NAME_H - f->line_height) / 2, g->log_head[room],
+        text_at(c, f, MARGIN_X, L.name_y + (L.name_h - f->line_height) / 2, g->log_head[room],
                 g->log_len[room], C_NAME);
     }
 
@@ -799,25 +907,19 @@ static void draw(Ui *ui) {
      * from the room's fragments against the flags as they are now, not read out of the
      * log, so a fragment that has appeared or vanished after a command is on screen at
      * once. Reading the log left the player looking at the room as it was on entry. */
-    band(c, DESC_Y, DESC_H, C_FIELD);
-    io_push_clip(c, (IoRect){ 0, DESC_Y, GAME_W, DESC_H });
-    {
-        size_t n = game_room_text(g, para, sizeof para);
-
-        if (n > 0) {
-            text_top(c, f, DESC_Y + PAD, GAME_W - 2 * MARGIN_X, para, (uint32_t)n, C_INK);
-        }
+    io_push_clip(c, (IoRect){ 0, L.desc_y, GAME_W, L.desc_h });
+    if (desc_n > 0) {
+        text_top(c, f, L.desc_y + PAD, GAME_W - 2 * MARGIN_X, dpara, (uint32_t)desc_n,
+                 C_INK);
     }
     io_pop_clip(c);
 
     /* command band */
-    band(c, CMD_Y, CMD_H, C_BAND);
-    layout_commands(ui);
+    (void)layout_commands(ui, para, (uint32_t)answer_n);
 
     /* The strip of what the player is carrying. A flag whose name starts with an
      * underscore is state rather than a thing, and the underscore is the only marker
      * the format has, so it is the whole test. */
-    band(c, ITEMS_Y, ITEMS_H, C_BAND);
     {
         int32_t x = MARGIN_X;
         char label[64];
@@ -867,9 +969,9 @@ static void draw(Ui *ui) {
                     break;
                 }
             }
-            io_fill_rect(c, (IoRect){ x, ITEMS_Y + 3, (int32_t)text_width(f, label, len) +
-                                     2 * CHIP_PAD_X, ITEMS_H - 6 }, C_CHIP);
-            text_at(c, f, x + CHIP_PAD_X, ITEMS_Y + 3 + (ITEMS_H - 6 - f->line_height) / 2,
+            io_fill_rect(c, (IoRect){ x, L.items_y + 3, (int32_t)text_width(f, label, len) +
+                                     2 * CHIP_PAD_X, L.items_h - 6 }, C_CHIP);
+            text_at(c, f, x + CHIP_PAD_X, L.items_y + 3 + (L.items_h - 6 - f->line_height) / 2,
                     label, len, C_DIM);
             x += (int32_t)text_width(f, label, len) + 2 * CHIP_PAD_X + CHIP_GAP;
             shown++;
@@ -892,32 +994,31 @@ static void draw(Ui *ui) {
                 int32_t cw = (int32_t)text_width(f, more, n) + 2 * CHIP_PAD_X;
                 int32_t cx = GAME_W - MARGIN_X - cw;
 
-                io_fill_rect(c, (IoRect){ cx, ITEMS_Y + 3, cw, ITEMS_H - 6 }, C_CHIP);
+                io_fill_rect(c, (IoRect){ cx, L.items_y + 3, cw, L.items_h - 6 }, C_CHIP);
                 text_at(c, f, cx + CHIP_PAD_X,
-                        ITEMS_Y + 3 + (ITEMS_H - 6 - f->line_height) / 2, more, n, C_DIM);
+                        L.items_y + 3 + (L.items_h - 6 - f->line_height) / 2, more, n, C_DIM);
             }
         }
         if (total == 0) {
             /* Nothing carried. Not "shown == 0", because a list too long for the
              * strip shows zero chips and a counter, and that is not emptiness. */
             static const char empty[] = "пусто";
-            text_at(c, f, x, ITEMS_Y + (ITEMS_H - f->line_height) / 2, empty,
+            text_at(c, f, x, L.items_y + (L.items_h - f->line_height) / 2, empty,
                     (uint32_t)(sizeof empty - 1), C_DIM);
         }
     }
 
     /* answer band, typed out */
-    band(c, RESP_Y, RESP_H, C_FIELD);
-    io_push_clip(c, (IoRect){ 0, RESP_Y, GAME_W, RESP_H });
+    io_push_clip(c, (IoRect){ 0, L.resp_y, GAME_W, L.resp_h });
     if (cmd != (size_t)-1) {
-        size_t n = block_text(g, cmd + 1, block_end(g, cmd), para, sizeof para);
+        size_t n = answer_n;
         size_t vis = (ui->typed >= (double)n) ? n : utf8_floor(para, n, (size_t)ui->typed);
 
-        int fit = (RESP_H - 2 * PAD) / f->line_height;
+        int fit = (L.resp_h - 2 * PAD) / f->line_height;
         int32_t end_x = MARGIN_X;
-        int32_t end_y = RESP_Y + PAD;
+        int32_t end_y = L.resp_y + PAD;
 
-        ui->scroll_want = text_tail(c, f, RESP_Y + PAD, fit, GAME_W - 2 * MARGIN_X, para,
+        ui->scroll_want = text_tail(c, f, L.resp_y + PAD, fit, GAME_W - 2 * MARGIN_X, para,
                                     (uint32_t)n, (uint32_t)vis, C_INK, ui->scroll,
                                     &end_x, &end_y);
         if (!ui->animate) {
@@ -937,7 +1038,7 @@ static void draw(Ui *ui) {
          * gave it, from one to four, and the hint that named two slots was wrong for
          * every command that is not two words long. */
         static const char hint[] = "Выберите действие.";
-        text_top(c, f, RESP_Y + PAD, GAME_W - 2 * MARGIN_X, hint,
+        text_top(c, f, L.resp_y + PAD, GAME_W - 2 * MARGIN_X, hint,
                  (uint32_t)(sizeof hint - 1), C_DIM);
     }
     io_pop_clip(c);
@@ -1162,8 +1263,9 @@ static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
 
 static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
     const TextFont *f = ui->font;
-    int32_t fit_desc = (DESC_H - 2 * PAD) / f->line_height;
-    int32_t fit_resp = (RESP_H - 2 * PAD) / f->line_height;
+    Layout L = compute_layout(ui, "", 0);
+    int32_t fit_desc = (L.desc_h - 2 * PAD) / f->line_height;
+    int32_t fit_resp = (L.resp_h - 2 * PAD) / f->line_height;
     int32_t usable = GAME_W - 2 * MARGIN_X;
     Worst w_ctrl = { 0, "" };
     Worst w_name = { 0, "" };
