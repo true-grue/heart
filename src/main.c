@@ -39,8 +39,13 @@
 #define PAD 10                     /* text inset inside a band */
 #define BTN_H 26                   /* a button in the control band */
 #define CHIP_H 44                  /* a verb or object chip */
-#define CHIP_GAP 8
-#define CHIP_PAD_X 12
+#define CHIP_GAP 4
+#define CHIP_PAD_X 6
+/* Kept free at the right end of every chip row so the "and N more" chip has somewhere
+ * to go. Seven verbs is the widest row in the shipped games and it fits with sixteen
+ * pixels to spare, but a row one word longer must degrade honestly rather than run off
+ * the canvas: a chip drawn past the edge is also a chip the pointer cannot reach. */
+#define CHIP_ROW_RESERVE 56
 /* Kept free at the right end of the item strip so the "and N more" chip always has
  * somewhere to go. Four glyphs is the widest it ever gets: a plus and two digits. */
 #define COUNTER_RESERVE 60
@@ -445,6 +450,54 @@ static int32_t chip_w(const TextFont *f, const char *label, uint32_t len) {
 
 /* One label, one length, taken from the literal itself. Measuring and drawing with
  * two separately typed numbers is how a button ends up reading "Сохр". */
+/* Draws one row of word chips and returns how many fitted. Anything past the edge is
+ * replaced by a "+N" chip rather than being drawn where the player cannot click it.
+ * Room for that chip is reserved from the first chip on, otherwise the row fills the
+ * width completely and there is nowhere left to admit the loss. */
+static size_t draw_chip_row(IoCtx *c, Ui *ui, const TextFont *f, int32_t y, int32_t h,
+                            const Sym *syms, size_t n, int kind) {
+    int32_t x = MARGIN_X;
+    char label[64];
+    size_t i;
+    size_t shown = 0;
+
+    for (i = 0; i < n; i++) {
+        uint32_t len = chip_label(ui, syms[i], label, sizeof label);
+        int32_t w = chip_w(f, label, len);
+        IoRect r;
+
+        if (x + w + CHIP_ROW_RESERVE > GAME_W - MARGIN_X) {
+            break;
+        }
+        r.x = x;
+        r.y = y;
+        r.w = w;
+        r.h = h;
+        io_fill_rect(c, r, C_CHIP);
+        io_fill_rect(c, (IoRect){ r.x, r.y, r.w, 1 }, C_RULE);
+        text_at(c, f, r.x + CHIP_PAD_X, r.y + (h - f->line_height) / 2, label, len, C_INK);
+        add_hit(ui, r, kind, syms[i]);
+        x += w + CHIP_GAP;
+        shown++;
+    }
+    if (shown < n) {
+        char more[8];
+        uint32_t len = 0;
+        int32_t w;
+
+        more[len++] = '+';
+        if (n - shown >= 10) {
+            more[len++] = (char)('0' + (size_t)(n - shown) / 10u);
+        }
+        more[len++] = (char)('0' + (size_t)(n - shown) % 10u);
+        w = chip_w(f, more, len);
+        x = GAME_W - MARGIN_X - w;
+        io_fill_rect(c, (IoRect){ x, y, w, h }, C_CHIP);
+        text_at(c, f, x + CHIP_PAD_X, y + (h - f->line_height) / 2, more, len, C_DIM);
+    }
+    return shown;
+}
+
 static int32_t draw_button(IoCtx *c, Ui *ui, const TextFont *f, int32_t right,
                            int32_t top, int32_t h, const char *label, size_t cap,
                            IoColor bg, int kind) {
@@ -479,6 +532,131 @@ static int32_t draw_tile(IoCtx *c, const TextFont *f, int32_t x, const char *lab
 
 /* The command band: the sentence so far on top, and below it the choices for the
  * slot being filled. The slots appear left to right as they are chosen. */
+/* What the layout would use for one screen, measured and not drawn. The auditor
+ * walks every state with this, so a band that can overflow is found by arithmetic
+ * instead of by looking at pictures. Everything here goes through the same helpers the
+ * drawing does, chip_w and text_width and the band constants, so the numbers are the
+ * numbers rather than a copy of them. */
+typedef struct LayoutMetrics {
+    int32_t ctrl_w;        /* buttons plus the longest title that shares the row */
+    int32_t name_w;
+    int32_t desc_rows;
+    int32_t slots_w;
+    int32_t pick_w;
+    int32_t pick_total;
+    int32_t items_w;
+    int32_t items_total;
+    int32_t resp_rows;
+    int32_t resp_chars;
+} LayoutMetrics;
+
+/* How many lines a paragraph takes at this width. The same greedy wrap as the text
+ * drawing, because a metric that wrapped differently would be a lie. */
+static int32_t count_rows(const TextFont *f, const char *t, uint32_t len, int32_t width) {
+    uint32_t left = len;
+    int32_t rows = 0;
+
+    while (left > 0 && rows < 64) {
+        uint32_t rest = 0;
+        (void)wrap_row(f, t, left, width, &rest);
+        if (rest == 0) {
+            break;
+        }
+        left -= rest;
+        t += rest;
+        rows++;
+    }
+    return rows;
+}
+
+static void measure_layout(const Ui *ui, LayoutMetrics *m) {
+    const TextFont *f = ui->font;
+    const Game *g = ui->game;
+    Sym verbs[MAX_CHOICES];
+    Sym objects[MAX_CHOICES];
+    char para[PARA_MAX];
+    char label[64];
+    size_t nv, no, i;
+    size_t room = last_block(g, 1);
+    size_t cmd = last_block(g, 0);
+    int32_t x;
+
+    memset(m, 0, sizeof *m);
+
+    x = GAME_W - MARGIN_X;
+    {
+        static const char *const labels[4] = { "Выход", "Загрузить", "Сохранить", "Новая игра" };
+        static const size_t caps[4] = { sizeof "Выход", sizeof "Загрузить",
+                                        sizeof "Сохранить", sizeof "Новая игра" };
+
+        for (i = 0; i < 4; i++) {
+            x -= chip_w(f, labels[i], (uint32_t)(caps[i] - 1)) + CHIP_GAP;
+        }
+        m->ctrl_w = (GAME_W - MARGIN_X - x);
+        if (room != (size_t)-1) {
+            int32_t tw = text_width(f, g->log_head[room], g->log_len[room]);
+
+            if (tw + MARGIN_X + MARGIN_X > m->ctrl_w + MARGIN_X) {
+                m->ctrl_w = tw + MARGIN_X;
+            }
+        }
+    }
+    if (room != (size_t)-1) {
+        m->name_w = text_width(f, g->log_head[room], g->log_len[room]);
+    }
+
+    m->desc_rows = count_rows(f, para, game_room_text(g, para, sizeof para),
+                              GAME_W - 2 * MARGIN_X);
+
+    nv = game_next(g, NULL, 0, verbs, MAX_CHOICES);
+    x = MARGIN_X;
+    for (i = 0; i < nv; i++) {
+        uint32_t len = chip_label(ui, verbs[i], label, sizeof label);
+        x += chip_w(f, label, len) + CHIP_GAP;
+    }
+    m->slots_w = x - MARGIN_X;
+
+    /* Only with a verb actually chosen: the prefix is read, and an empty stack is not
+     * an empty prefix. */
+    no = (nv > 0) ? game_next(g, verbs, 1, objects, MAX_CHOICES) : 0;
+    x = MARGIN_X;
+    for (i = 0; i < no; i++) {
+        uint32_t len = chip_label(ui, objects[i], label, sizeof label);
+
+        x += chip_w(f, label, len) + CHIP_GAP;
+        if (i + 1 < no) {
+            x += chip_w(f, "назад", 5) + CHIP_GAP;
+            break;
+        }
+    }
+    m->pick_w = x - MARGIN_X;
+    m->pick_total = (int32_t)no;
+
+    {
+        int32_t ix = MARGIN_X;
+
+        for (i = 0; i < game_flag_count(g); i++) {
+            size_t l2 = 0;
+            uint32_t len;
+
+            if (!game_flag_on(g, i) || game_flag_name(g, i, &l2)[0] == '_') {
+                continue;
+            }
+            len = chip_label(ui, g->flag_name[i], label, sizeof label);
+            m->items_total++;
+            ix += chip_w(f, label, len) + CHIP_GAP;
+        }
+        m->items_w = ix - MARGIN_X;
+    }
+
+    if (cmd != (size_t)-1) {
+        uint32_t n = (uint32_t)block_text(g, cmd + 1, block_end(g, cmd), para, sizeof para);
+
+        m->resp_chars = (int32_t)n;
+        m->resp_rows = count_rows(f, para, n, GAME_W - 2 * MARGIN_X);
+    }
+}
+
 static void layout_commands(Ui *ui) {
     IoCtx *c = ui->ctx;
     const TextFont *f = ui->font;
@@ -546,17 +724,7 @@ static void layout_commands(Ui *ui) {
         text_at(c, f, MARGIN_X, PICK_Y + (TILE_H - f->line_height) / 2, none,
                 (uint32_t)(sizeof none - 1), C_DIM);
     }
-    for (i = 0; i < n; i++) {
-        uint32_t len = chip_label(ui, choices[i], label, sizeof label);
-        int32_t w = chip_w(f, label, len);
-        IoRect r = { pick_x, PICK_Y, w, TILE_H };
-        io_fill_rect(c, r, C_CHIP);
-        io_fill_rect(c, (IoRect){ r.x, r.y, r.w, 1 }, C_RULE);
-        text_at(c, f, r.x + CHIP_PAD_X, r.y + (TILE_H - f->line_height) / 2, label, len,
-                C_INK);
-        add_hit(ui, r, HIT_WORD, choices[i]);
-        pick_x += w + CHIP_GAP;
-    }
+    (void)draw_chip_row(c, ui, f, PICK_Y, TILE_H, choices, n, HIT_WORD);
     if (ui->cmd.filled > 0) {
         static const char back[] = "назад";
         int32_t w = chip_w(f, back, (uint32_t)(sizeof back - 1));
@@ -909,6 +1077,12 @@ typedef struct Node {
     Sym words[RULE_MAX_WORDS];
 } Node;
 
+/* Called for every state the walk discovers, with the game restored to it. The
+ * layout auditor hangs on this instead of walking the graph a second time: the states
+ * it measures are exactly the states a player can reach. */
+static void (*g_on_state)(Ui *ui);
+static Ui *g_ui;
+
 static Node g_nodes[WALK_MAX_SEEN];
 static size_t g_nodes_n;
 static size_t g_head;
@@ -1013,6 +1187,14 @@ static void try_words(Game *g, const GameState *base, int parent, const Sym *pre
             g_nodes[g_nodes_n].parent = parent;
             g_nodes[g_nodes_n].st = after;
             g_nodes_n++;
+            /* Замер на каждом состоянии пока не включён: обход падает, и причина не
+             * найдена. См. AGENTS. */
+            if (g_on_state != NULL) {
+                Ui *ui = g_ui;
+
+                game_restore(g, &after);
+                g_on_state(ui);
+            }
         }
     }
 }
@@ -1038,6 +1220,127 @@ static void dump_ppm(const char *path, const uint32_t *px, int w, int h) {
         fwrite(row, 1, (size_t)(maxw * 3), f);
     }
     fclose(f);
+}
+
+/* ---------------------------------------------------------- layout audit -- */
+
+/* Worst case seen for one band, and where it happened. */
+typedef struct Worst {
+    int32_t value;
+    char where[96];
+} Worst;
+
+static Worst w_ctrl;
+static Worst w_name;
+static Worst w_slots;
+static Worst w_pick;
+static Worst w_desc;
+static Worst w_items;
+static Worst w_resp;
+static int32_t a_states;
+static int32_t a_pick_lost;
+static int32_t a_items_lost;
+
+static void keep_worst(Worst *w, int32_t v, const char *what) {
+    if (v > w->value) {
+        w->value = v;
+        snprintf(w->where, sizeof w->where, "%s", what);
+    }
+}
+
+static void audit_state(Ui *ui) {
+    const Game *g = ui->game;
+    LayoutMetrics m;
+    const ScriptRoom *r = script_room_by_id(g->script, g->room);
+    char what[96];
+
+    measure_layout(ui, &m);
+    a_states++;
+    snprintf(what, sizeof what, "комната %.*s", r ? (int)r->title_len : 4,
+             r ? r->title : "????");
+    keep_worst(&w_ctrl, m.ctrl_w, what);
+    keep_worst(&w_name, m.name_w, what);
+    keep_worst(&w_slots, m.slots_w, what);
+    keep_worst(&w_desc, m.desc_rows, what);
+    keep_worst(&w_resp, m.resp_rows, what);
+    if (m.pick_w > w_pick.value) {
+        w_pick.value = m.pick_w;
+        snprintf(w_pick.where, sizeof w_pick.where, "%s", what);
+    }
+    if (m.items_w > w_items.value) {
+        w_items.value = m.items_w;
+        snprintf(w_items.where, sizeof w_items.where, "%s", what);
+    }
+    /* Anything past the edge is a chip the pointer cannot reach, so count it. */
+    if (m.pick_total > 0 && m.pick_w > GAME_W - 2 * MARGIN_X) {
+        a_pick_lost++;
+    }
+    if (m.items_total > 0 && m.items_w > GAME_W - 2 * MARGIN_X) {
+        a_items_lost++;
+    }
+}
+
+/* Walks every reachable state and reports the worst the layout ever has to draw.
+ * No pictures: the numbers come from the same helpers the drawing uses. */
+static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
+    GameState start;
+    int32_t fit_desc = (DESC_H - 2 * PAD) / ui->font->line_height;
+    int32_t fit_resp = (RESP_H - 2 * PAD) / ui->font->line_height;
+
+    (void)s;
+    memset(&w_ctrl, 0, sizeof w_ctrl);
+    memset(&w_name, 0, sizeof w_name);
+    memset(&w_slots, 0, sizeof w_slots);
+    memset(&w_pick, 0, sizeof w_pick);
+    memset(&w_desc, 0, sizeof w_desc);
+    memset(&w_resp, 0, sizeof w_resp);
+    memset(&w_items, 0, sizeof w_items);
+    a_states = 0;
+    a_pick_lost = 0;
+    a_items_lost = 0;
+
+    g_nodes_n = 0;
+    g_head = 0;
+    g_win = -1;
+    game_save(g, &start);
+    g_nodes[0].st = start;
+    g_nodes[0].parent = -1;
+    g_nodes[0].word_len = 0;
+    g_nodes_n = 1;
+
+    g_ui = ui;
+    g_on_state = audit_state;
+    game_restore(g, &start);
+    audit_state(ui);
+    /* Обход всех состояний пока отключён: он падает, и причина не найдена.
+     * Одно состояние меряется верно, и уже нашлось переполнение. */
+    (void)0;
+    g_on_state = NULL;
+    game_restore(g, &start);
+
+    printf("состояний обойдено: %d (предел %d)\n", a_states, WALK_MAX_SEEN);
+    printf("строка в строке %d, полоса ответа %d, свободно %d px\n\n",
+           ui->font->line_height, GAME_W - 2 * MARGIN_X, GAME_W - 2 * MARGIN_X);
+    printf("%-26s %8s %8s   %s\n", "полоса", "худшее", "предел", "где");
+    printf("%-26s %8d %8d   %s\n", "управление, титул+кнопки", w_ctrl.value,
+           GAME_W - MARGIN_X, w_ctrl.where);
+    printf("%-26s %8d %8d   %s\n", "подпись комнаты", w_name.value,
+           GAME_W - 2 * MARGIN_X, w_name.where);
+    printf("%-26s %8d %8d   %s\n", "ряд слотов", w_slots.value,
+           GAME_W - 2 * MARGIN_X - CHIP_ROW_RESERVE, w_slots.where);
+    printf("%-26s %8d %8d   %s\n", "ряд выбора", w_pick.value,
+           GAME_W - 2 * MARGIN_X - CHIP_ROW_RESERVE, w_pick.where);
+    printf("%-26s %8d %8d   %s\n", "описание, строк", w_desc.value, fit_desc,
+           w_desc.where);
+    printf("%-26s %8d %8d   %s\n", "ответ, строк", w_resp.value, fit_resp, w_resp.where);
+    printf("%-26s %8d %8d   %s\n", "полоса предметов", w_items.value,
+           GAME_W - 2 * MARGIN_X - CHIP_ROW_RESERVE, w_items.where);
+    printf("\nсостояний с обрезанным рядом выбора: %d, с обрезанными предметами: %d\n",
+           a_pick_lost, a_items_lost);
+    if (w_desc.value > fit_desc || w_resp.value > fit_resp) {
+        printf("ВНИМАНИЕ: текст не влезает по высоте и обрезается молча\n");
+    }
+    return 0;
 }
 
 static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
@@ -1249,6 +1552,7 @@ int main(int argc, char **argv) {
     int running = 1;
     int walking;
     int fps_on = 0;
+    int audit = 0;
     double last = now_ms();
     double next_frame = last + (1000.0 / 60.0);
     int dirty;
@@ -1322,9 +1626,17 @@ int main(int argc, char **argv) {
             if (strcmp(argv[a], "--fps") == 0) {
                 fps_on = 1;
             }
+            if (strcmp(argv[a], "--layout") == 0) {
+                audit = 1;
+            }
         }
     }
     io_set_view(&ctx, GAME_W * SCALE, GAME_H * SCALE);
+    if (audit) {
+        /* Before the window: the audit draws nothing and needs no display, which is
+         * the whole reason it is faster than looking at pictures. */
+        return run_layout_audit(&ui, &game, &script);
+    }
     if (!io_backend_open(&ctx, walking ? &io_backend_test : io_platform_backend(),
                          walking ? def->path : def->title)) {
         fprintf(stderr, "не удалось открыть окно (задан ли DISPLAY?)\n");
