@@ -688,8 +688,14 @@ static void mark_new_fragments(Ui *ui, const Game *g) {
      * fragment in it is new to the player and none of it is news, so the baseline is
      * recorded and nothing is marked. Without this the whole new room lights up. */
     if (g->room != ui->last_room) {
+        /* Deliberately not recording the baseline here. This runs the instant the
+         * command returns, and whether the room's text can be assembled yet is a
+         * matter of timing; recording an empty baseline means the next action inside
+         * that room finds every fragment new and paints the whole room. The baseline is
+         * taken lazily by draw, on a frame where the room is already on screen. */
         ui->last_room = g->room;
-        note_room_fragments(ui, g);
+        ui->frag_line_n = 0;
+        ui->frag_hot_n = 0;
         return;
     }
     ui->frag_hot_n = 0;
@@ -1038,9 +1044,15 @@ static void draw(Ui *ui) {
      * frame, which both repaints the old colours and stops anything being marked. */
     if ((size_t)g->room != ui->last_room) {
         ui->last_room = (size_t)g->room;
-        note_room_fragments(ui, g);
         ui->dscroll = 0.0;
         ui->dscroll_want = 0.0;
+    }
+    /* The room on screen always has its baseline recorded, before anything can act in
+     * it. Invariant, not a reaction: whatever happened to the previous room, whatever
+     * the command did on the way here, the fragments currently visible are the ones
+     * that were already there and nothing may light up on account of arriving. */
+    if (ui->frag_line_n == 0) {
+        note_room_fragments(ui, g);
     }
 
     io_fill_rect(c, (IoRect){ 0, 0, GAME_W, GAME_H }, C_BG);
