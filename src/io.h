@@ -100,7 +100,7 @@ struct IoCtx {
     uint32_t *pixels;          /* the virtual canvas, 0x00RRGGBB, caller owned */
     int32_t w, h;              /* virtual size, fixed for the session */
     int32_t view_w, view_h;    /* actual window size in physical pixels */
-    IoRect view_rect;          /* the canvas inside the window, bars excluded */
+
 
     IoRect clip[IO_CLIP_MAX];
     int clip_n;

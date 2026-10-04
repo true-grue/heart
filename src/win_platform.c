@@ -136,7 +136,15 @@ static LRESULT CALLBACK win_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         st->w = (int32_t)LOWORD(lp);
         st->h = (int32_t)HIWORD(lp);
-        if (st->w > 0 && st->h > 0 &&
+        /* The view has to be told, or every later tap is translated through the size
+         * the window had before, and no button is ever hit again. */
+        if (st->w > 0 && st->h > 0 && st->ctx != NULL) {
+            io_set_view(st->ctx, st->w, st->h);
+        }
+        /* CreateWindowExW sends WM_SIZE before win_open has made the memory DC, so the
+         * guard is on that and not on the size: at that moment there is nothing to
+         * rebuild, and SelectObject on a NULL DC is a hard failure. */
+        if (st->mem != NULL && st->w > 0 && st->h > 0 &&
             (st->w != st->dib_w || st->h != st->dib_h)) {
             win_make_dib(st);
         }

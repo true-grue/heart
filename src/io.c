@@ -24,9 +24,9 @@ int io_init(IoCtx *ctx, uint32_t *pixels, int32_t w, int32_t h) {
     ctx->clip_n = 1;
     ctx->view_w = w;
     ctx->view_h = h;
-    /* A one to one mapping until a backend reports a real window, so headless
-     * callers and tests get window pixels that already are canvas pixels. */
-    ctx->view_rect = letterbox(w, h, w, h);
+    /* A one to one mapping until a backend reports a real window, and it comes out of
+     * this on its own: the canvas matches the window because the two numbers are equal,
+     * not because anything was cached while they were. */
     return 1;
 }
 
@@ -102,9 +102,11 @@ void io_set_view(IoCtx *ctx, int32_t view_w, int32_t view_h) {
     if (ctx == NULL || view_w <= 0 || view_h <= 0) {
         return;
     }
+    /* Only the size is recorded. The canvas rectangle inside the window is worked out
+     * where it is needed, because a copy of it is a second answer to the same question
+     * and the two answers drift the moment one place is updated and the other is not. */
     ctx->view_w = view_w;
     ctx->view_h = view_h;
-    ctx->view_rect = letterbox(view_w, view_h, ctx->w, ctx->h);
 }
 
 void io_to_virtual(const IoCtx *ctx, int32_t win_x, int32_t win_y,
@@ -122,7 +124,7 @@ void io_to_virtual(const IoCtx *ctx, int32_t win_x, int32_t win_y,
     if (ctx == NULL) {
         return;
     }
-    v = ctx->view_rect;
+    v = letterbox(ctx->view_w, ctx->view_h, ctx->w, ctx->h);
     if (v.w <= 0 || v.h <= 0) {
         return;
     }

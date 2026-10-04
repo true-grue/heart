@@ -1273,10 +1273,20 @@ static void test_io_pointer_converts_to_virtual(void) {
     /* A window of 32 x 24 is exactly twice the canvas, so the mapping is easy to
      * state by hand: no bars, and every coordinate lands on an even pixel. */
     io_set_view(&ctx, 32, 24);
-    CHECK_INT(ctx.view_rect.x, 0);
-    CHECK_INT(ctx.view_rect.y, 0);
-    CHECK_INT(ctx.view_rect.w, 32);
-    CHECK_INT(ctx.view_rect.h, 24);
+    /* The canvas rectangle is not stored anywhere, only worked out when it is needed,
+     * so it is checked the only way it can be observed: a window pixel at the corner
+     * and one past the far edge have to land on canvas 0,0 and 16,12. */
+    {
+        int32_t vx = -1;
+        int32_t vy = -1;
+
+        io_to_virtual(&ctx, 0, 0, &vx, &vy);
+        CHECK_INT(vx, 0);
+        CHECK_INT(vy, 0);
+        io_to_virtual(&ctx, 32, 24, &vx, &vy);
+        CHECK_INT(vx, 16);
+        CHECK_INT(vy, 12);
+    }
 
     memset(&in, 0, sizeof in);
     in.kind = IO_EV_POINTER_MOVE;
@@ -1305,10 +1315,18 @@ static void test_io_pointer_agrees_with_scaling(void) {
     /* A square window forces letterbox bars, so the canvas no longer starts at
      * the window origin and the mapping is not a plain division. */
     io_set_view(&ctx, 20, 20);
-    CHECK_INT(ctx.view_rect.x, 0);
-    CHECK_INT(ctx.view_rect.y, 2);
-    CHECK_INT(ctx.view_rect.w, 20);
-    CHECK_INT(ctx.view_rect.h, 15);
+    /* Bars top and bottom: the canvas starts two pixels down and is fifteen tall, so
+     * the top bar maps to negative canvas and the bottom bar past the end. */
+    {
+        int32_t vx = -1;
+        int32_t vy = -1;
+
+        io_to_virtual(&ctx, 0, 0, &vx, &vy);
+        CHECK_INT(vx, 0);
+        CHECK(vy < 0);
+        io_to_virtual(&ctx, 0, 19, &vx, &vy);
+        CHECK(vy >= 12);
+    }
 
     /* Paint one recognisable pixel, scale it into the window, then convert that
      * window pixel back. If the two halves of the letterbox arithmetic ever
