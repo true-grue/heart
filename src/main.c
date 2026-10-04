@@ -4,7 +4,6 @@
 #include "utf8.h"
 #include "game.h"
 #include "io.h"
-#include "test_platform.h"
 #include "font.h"
 
 #include <stdio.h>
@@ -99,7 +98,8 @@ typedef struct GameDef {
 static const GameDef k_games[] = {
     { "tutorial", "assets/script/tutorial.script", "Учебный квест" },
     { "rats", "assets/script/rats.script", "КРЫСОЛОВ" },
-    { "field", "assets/script/field.script", "МЕЧ ИЗ ЗАМКА" }
+    { "field", "assets/script/field.script", "МЕЧ ИЗ ЗАМКА" },
+    { "heart", "assets/script/heart.script", "Серое Сердце" }
 };
 
 typedef struct Hit {
@@ -1135,21 +1135,47 @@ static int probe_load(const char *path) {
     return 0;
 }
 
+/* Which script a per-game build starts with. `make heart` compiles the name into the
+ * binary so that it runs with no argument; the plain quest still asks. */
+#ifndef GAME_DEFAULT
+#define GAME_DEFAULT "tutorial"
+#endif
+
 static const GameDef *pick_game(int argc, char **argv) {
     size_t i;
+    /* The first argument that is not a flag is the game. A per-game build carries its
+     * own name inside, so `heart --walk out` has to work the same as `quest heart
+     * --walk out`: taking argv[1] blindly would read "--walk" as the game. */
+    const char *name = NULL;
 
-    if (argc < 2) {
-        return &k_games[0];
+    for (i = 1; i < (size_t)argc; i++) {
+        if (argv[i][0] == '-') {
+            /* --walk takes a directory, and that directory is not the game. */
+            if (strcmp(argv[i], "--walk") == 0) {
+                i++;
+            }
+            continue;
+        }
+        name = argv[i];
+        break;
     }
-    if (strcmp(argv[1], "--load") == 0) {
+    if (strcmp(argc > 1 ? argv[1] : "", "--load") == 0) {
         exit(probe_load(argc >= 3 ? argv[2] : ""));
     }
+    if (name == NULL) {
+        for (i = 0; i < sizeof k_games / sizeof k_games[0]; i++) {
+            if (strcmp(k_games[i].key, GAME_DEFAULT) == 0) {
+                return &k_games[i];
+            }
+        }
+        return &k_games[0];
+    }
     for (i = 0; i < sizeof k_games / sizeof k_games[0]; i++) {
-        if (strcmp(argv[1], k_games[i].key) == 0) {
+        if (strcmp(name, k_games[i].key) == 0) {
             return &k_games[i];
         }
     }
-    fprintf(stderr, "неизвестная игра \"%s\", известны:", argv[1]);
+    fprintf(stderr, "неизвестная игра \"%s\", известны:", name);
     for (i = 0; i < sizeof k_games / sizeof k_games[0]; i++) {
         fprintf(stderr, " %s", k_games[i].key);
     }

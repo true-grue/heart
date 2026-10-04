@@ -198,4 +198,10 @@ int32_t io_drag_y(const IoCtx *ctx);
  * open, which the caller reports like any other failure. */
 const IoBackend *io_platform_backend(void);
 
+/* The headless backend, for the tests and the walkthrough. It is named here, and no
+ * platform is, because it is not a platform: every build has it, whatever the target
+ * is. Its own file decides whether it is also the platform, and only when the build
+ * says there is no windowing target at all. */
+extern const IoBackend io_backend_test;
+
 #endif

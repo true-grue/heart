@@ -34,7 +34,12 @@ LIB_SRC  := src/arena.c \
 X11_SRC  := src/x11_platform.c
 X11_FLAGS := -DIO_X11
 X11_LIBS := -lX11
-HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null 2>/dev/null && echo 1)
+# Both streams go to /dev/null, and that is the whole trick. -E writes the
+# preprocessed header to stdout, and $(shell) captures stdout, so with only stderr
+# thrown away HAVE_X11 came out as half a megabyte of Xlib.h with a 1 at the end, the
+# comparison below never matched, and every build since silently had no X11 in it.
+# Nothing noticed because the tests and the walkthrough run on the test backend.
+HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null >/dev/null 2>&1 && echo 1)
 
 # The target is chosen by the compiler, not by the caller: a MinGW GCC is a Windows
 # build and needs no other switch, which is the whole point of the one-line seam.
@@ -54,6 +59,10 @@ else ifeq ($(HAVE_X11),1)
 LIB_SRC   += $(X11_SRC)
 CFLAGS_X  := $(X11_FLAGS)
 LDFLAGS_X := $(X11_LIBS)
+else
+# No windowing target on this machine: the headless backend is the platform. The file is
+# in LIB_SRC either way, so this flag only says whether it also answers for the platform.
+CFLAGS_X  := -DIO_TEST
 endif
 
 HDRS := src/arena.h \
@@ -61,8 +70,14 @@ HDRS := src/arena.h \
         src/game.h \
         src/io.h \
         src/dsl.h \
-        src/test_platform.h \
         src/font.h
+
+# One target per game, so `make heart` builds the game with that script baked in and it
+# starts with no argument. The list is named rather than globbed: a script in the assets
+# directory is not automatically a build target, because a game that does not compile is
+# not something to discover during a build.
+GAMES     := tutorial rats field heart
+GAME_BINS := $(addprefix $(BUILD)/,$(GAMES))
 
 STRESS_SRC := tests/stress.c
 QUEST_SRC := src/main.c
@@ -96,7 +111,7 @@ $(CONFIG):
 
 DEP := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(AN_OBJ:.o=.d)
 
-.PHONY: all test analyze demo demo-asan win clean
+.PHONY: all test analyze demo demo-asan win clean $(GAMES)
 
 all: $(LIB)
 
@@ -130,6 +145,10 @@ $(QUEST): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 $(STRESS_ASAN): $(LIB_SRC) $(STRESS_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) $(INC) $(CFLAGS_X) -o $@ $(LIB_SRC) $(STRESS_SRC) $(LDFLAGS_X)
 
+$(GAME_BINS): $(BUILD)/%: $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
+	$(CC) $(CSTD) $(WARN) $(REL) $(INC) $(CFLAGS_X) -DGAME_DEFAULT='"$*"' \
+		-o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
+
 $(QUEST_ASAN): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) $(INC) $(CFLAGS_X) -o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
 
@@ -137,6 +156,8 @@ $(QUEST_ASAN): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 # have to be remembered. Nothing else about the build changes.
 win:
 	$(MAKE) CC=x86_64-w64-mingw32-gcc quest
+
+$(GAMES): %: $(BUILD)/%
 
 demo: $(STRESS)
 demo-asan: $(STRESS_ASAN)

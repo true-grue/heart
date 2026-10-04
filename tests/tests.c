@@ -3,7 +3,6 @@
 #include "arena.h"
 #include "utf8.h"
 #include "io.h"
-#include "test_platform.h"
 #include "font.h"
 #include "dsl.h"
 #include "game.h"

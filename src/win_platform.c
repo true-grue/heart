@@ -320,11 +320,10 @@ const IoBackend io_backend_win = {
     win_close
 };
 
-/* The platform entry point for a Windows build. Exactly one platform file may define
- * this, so a build that does have one keeps the guard. */
-#if !defined(IO_X11)
+/* The platform entry point. Unconditional inside this file's own guard, for the same
+ * reason as the other platform files: the build chose this one, so nothing here has to
+ * know which other platform files exist in order not to collide with them. */
 const IoBackend *io_platform_backend(void) {
     return &io_backend_win;
 }
-#endif
 #endif

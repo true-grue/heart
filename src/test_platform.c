@@ -1,4 +1,4 @@
-#include "test_platform.h"
+#include "io.h"
 
 static int test_open(void *self, const char *title, int32_t w, int32_t h) {
     (void)self;
@@ -37,10 +37,11 @@ const IoBackend io_backend_test = {
     test_close
 };
 
-/* The platform entry point when the build has no windowing target at all, which is
- * what a headless test run wants. Both targets are named because a Windows build does
- * not define IO_X11, and without that this would collide with the Windows platform. */
-#if !defined(IO_X11) && !defined(IO_WIN)
+/* The platform entry point, and only when the build has no windowing target at all,
+ * which is what a headless run wants. No other platform is named here: the build says
+ * which file is the platform, and this file is told so by its own flag rather than by
+ * knowing what else could have been chosen. */
+#ifdef IO_TEST
 const IoBackend *io_platform_backend(void) {
     return &io_backend_test;
 }
