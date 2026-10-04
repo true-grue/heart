@@ -1198,8 +1198,15 @@ int main(int argc, char **argv) {
     size_t font_len = 0, script_len = 0;
     int running = 1;
     int walking;
+    int fps_on = 0;
     double last = now_ms();
     double next_frame = last + (1000.0 / 60.0);
+    int dirty;
+    int32_t seen_w = 0;
+    int32_t seen_h = 0;
+    double fps_since = last;
+    double worst_ms = 0.0;
+    unsigned long fps_frames = 0;
 
     def = pick_game(argc, argv);
     if (def == NULL) {
@@ -1255,6 +1262,18 @@ int main(int argc, char **argv) {
     /* The walkthrough draws into the framebuffer and never reads input, so it runs
      * on the test backend: no window, no display, nothing to tear down. */
     walking = (argc >= 4 && strcmp(argv[2], "--walk") == 0);
+    {
+        /* The same frame report stress prints, so the two can be compared instead of
+         * guessed at. Off unless asked for: a game that prints its own rate every
+         * second is a game nobody would ship. */
+        int a;
+
+        for (a = 1; a < argc; a++) {
+            if (strcmp(argv[a], "--fps") == 0) {
+                fps_on = 1;
+            }
+        }
+    }
     io_set_view(&ctx, GAME_W * SCALE, GAME_H * SCALE);
     if (!io_backend_open(&ctx, walking ? &io_backend_test : io_platform_backend(),
                          walking ? def->path : def->title)) {
@@ -1267,6 +1286,10 @@ int main(int argc, char **argv) {
         return rc;
     }
 
+    /* Redraw only when something can have changed. The screen is static most of the
+     * time and repainting it anyway costs a full pass over the window for nothing,
+     * which is the difference between a game at rest and a fan running. */
+    dirty = 1;
     while (running) {
         IoEvent ev;
         double t0 = now_ms();
@@ -1283,9 +1306,19 @@ int main(int argc, char **argv) {
             timeout = 0;
         }
         io_poll(&ctx, timeout);
+        /* A resize is not an event: the view size simply becomes different. */
+        if (ctx.view_w != seen_w || ctx.view_h != seen_h) {
+            seen_w = ctx.view_w;
+            seen_h = ctx.view_h;
+            dirty = 1;
+        }
 
         while (io_next_event(&ctx, &ev)) {
             size_t i;
+
+            /* Any event at all means the screen may have to change, including the ones
+             * this game has no use for: a redraw is cheaper than deciding which count. */
+            dirty = 1;
 
             if (ev.kind == IO_EV_QUIT) {
                 running = 0;
@@ -1391,6 +1424,9 @@ int main(int argc, char **argv) {
             }
             ui.scroll += (ui.scroll_want - ui.scroll) * k;
         }
+        if (!ui.done || ui.scroll != ui.scroll_want) {
+            dirty = 1;
+        }
         if (!ui.done) {
             ui.typed += TYPE_CPS * dt / 1000.0;
             if (ui.typed >= (double)answer) {
@@ -1400,11 +1436,32 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (running) {
+        if (running && dirty) {
+            double t_draw = now_ms();
+
+            dirty = 0;
             draw(&ui);
             if (ctx.backend != NULL && ctx.backend->present != NULL) {
                 ctx.backend->present(ctx.backend->self, &ctx);
             }
+            if (fps_on) {
+                double cost = now_ms() - t_draw;
+
+                if (cost > worst_ms) {
+                    worst_ms = cost;
+                }
+                fps_frames++;
+            }
+        }
+        /* Counted outside the redraw, so a screen standing still reports zero rather
+         * than saying nothing at all. Zero here is the whole point of skipping it. */
+        if (fps_on && now_ms() - fps_since >= 1000.0) {
+            fprintf(stderr, "%4d x %4d  %6.1f fps   худший кадр %6.1f ms\n",
+                    ctx.view_w, ctx.view_h,
+                    fps_frames * 1000.0 / (now_ms() - fps_since), worst_ms);
+            fps_since = now_ms();
+            fps_frames = 0;
+            worst_ms = 0.0;
         }
         next_frame += 1000.0 / 60.0;
         if (next_frame < now_ms()) {
