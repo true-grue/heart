@@ -127,9 +127,16 @@ void game_head(Game *g, const char *title, uint32_t title_len, const Sym *words,
  * They are different things the moment a command runs, because a flag moving is how a
  * fragment appears or vanishes, and reading the log for the screen would leave the
  * player looking at a room that no longer exists. */
-size_t game_room_text(const Game *g, char *out, size_t cap) {
+/* The same text, plus where each fragment landed in it.
+ *
+ * The description is assembled from fragments whose guards hold, so a fragment can
+ * appear because of what the player just did. To point that out, the caller has to
+ * know where the fragment begins and ends; a flat string throws that away. */
+size_t game_room_text_spans(const Game *g, char *out, size_t cap, FragSpan *spans,
+                            size_t span_cap) {
     const ScriptRoom *r = script_room_by_id(g->script, g->room);
     size_t n = 0;
+    size_t sn = 0;
     uint32_t i;
 
     if (out == NULL || cap == 0) {
@@ -142,6 +149,7 @@ size_t game_room_text(const Game *g, char *out, size_t cap) {
     for (i = 0; i < r->frag_len; i++) {
         const Frag *f = &r->frags[i];
         size_t k;
+        size_t start;
         size_t take;
 
         if (!cond_holds(g, f->guard, f->guard_len)) {
@@ -150,6 +158,7 @@ size_t game_room_text(const Game *g, char *out, size_t cap) {
         if (n > 0 && n + 1 < cap) {
             out[n++] = ' ';
         }
+        start = n;
         take = f->text_len;
         if (take > cap - 1 - n) {
             take = cap - 1 - n;
@@ -158,12 +167,19 @@ size_t game_room_text(const Game *g, char *out, size_t cap) {
             out[n + k] = f->text[k];
         }
         n += take;
-        if (n + 1 >= cap) {
-            break;
+        if (spans != NULL && sn < span_cap && take > 0) {
+            spans[sn].off = (uint32_t)start;
+            spans[sn].len = (uint32_t)take;
+            spans[sn].line = f->line;
+            sn++;
         }
     }
     out[n] = '\0';
     return n;
+}
+
+size_t game_room_text(const Game *g, char *out, size_t cap) {
+    return game_room_text_spans(g, out, cap, NULL, 0);
 }
 
 void game_enter(Game *g, Sym room) {

@@ -92,6 +92,20 @@
 #define C_QUIT IO_RGB(96, 48, 48)
 #define C_RULE IO_RGB(56, 58, 68)
 #define C_CARET IO_RGB(226, 200, 140)
+/* What the eye is meant to catch: text that turned up because of what the player just
+ * did. Warm against the cold ink, and dark enough to keep reading at length. */
+#define C_HOT IO_RGB(255, 196, 108)
+
+/* A run of the description to draw in the accent colour. Byte offsets into the text the
+ * band is drawing, which is what lets a highlight survive rewrapping: the run is
+ * marked in the source text and the row drawer finds it wherever it lands. */
+typedef struct Span {
+    uint32_t off;
+    uint32_t len;
+} Span;
+
+#define FRAG_MAX 64
+
 
 typedef struct GameDef {
     const char *key;
@@ -148,6 +162,13 @@ typedef struct Ui {
     int animate;          /* off for the walkthrough: the frames must be comparable */
     int overfull;         /* frames whose bands could not hold their own text */
     size_t last_room;      /* to notice a new room and start its scroll over */
+    /* Fragments of this room already on screen, and those that arrived with the last
+     * command. Keyed on the fragment's line in the script, the only stable name one
+     * has. */
+    int frag_line[FRAG_MAX];
+    size_t frag_line_n;
+    int frag_hot[FRAG_MAX];
+    size_t frag_hot_n;
     int done;             /* the answer is fully revealed */
 } Ui;
 
@@ -344,7 +365,8 @@ static void text_top(IoCtx *c, const TextFont *f, int32_t top, int32_t width,
  * drifting apart: a caret placed by its own arithmetic ends up on some other row. */
 static double text_tail(IoCtx *c, const TextFont *f, int32_t top, int fit, int32_t width,
                         const char *full, uint32_t len, uint32_t vis, IoColor ink,
-                        double off, int32_t *end_x, int32_t *end_y) {
+                        double off, const Span *hl, size_t hl_n, IoColor hot,
+                        int32_t *end_x, int32_t *end_y) {
     const char *base = full;
     Rows r;
     uint32_t left = len;
@@ -405,7 +427,46 @@ static double text_tail(IoCtx *c, const TextFont *f, int32_t top, int fit, int32
             if (to > vis) {
                 to = vis;
             }
-            text_draw(c, f, PAD, y, base + from, to - from, ink);
+            /* Drawn in pieces so a highlighted run can change colour without the row
+             * being laid out twice. Splits fall on fragment boundaries, which are
+             * whole UTF-8 sequences, so no piece ever starts mid-character. */
+            {
+                uint32_t p = from;
+
+                while (p < to) {
+                    uint32_t seg = to;
+                    IoColor col = ink;
+                    size_t q;
+
+                    for (q = 0; q < hl_n; q++) {
+                        uint32_t a = hl[q].off;
+                        uint32_t b = a + hl[q].len;
+
+                        if (p >= a && p < b) {
+                            col = hot;
+                            if (b < seg) {
+                                seg = b;
+                            }
+                            break;
+                        }
+                        if (p < a && a < seg) {
+                            seg = a;
+                        }
+                    }
+                    if (seg <= p) {
+                        seg = p + 1;
+                    }
+                    if (seg > to) {
+                        seg = to;
+                    }
+                    /* Each piece starts where the ones before it end. Drawing them all
+                     * at the left margin piles the row into itself, which looks like
+                     * garbled text rather than a coloured run. */
+                    text_draw(c, f, PAD + text_width(f, base + from, p - from), y,
+                              base + p, seg - p, col);
+                    p = seg;
+                }
+            }
             if (to == vis) {
                 /* The caret belongs after the last character that arrived, which is the
                  * end of whatever row the reveal currently stops in. */
@@ -610,6 +671,59 @@ static size_t gather_pick(Ui *ui, Sym *choices, size_t cap) {
         }
     }
     return n;
+}
+
+/* Works out which fragments the last command brought in, so the description can point
+ * at them. Called once per action, not per frame: the highlight is meant to sit there
+ * until the player does something else. */
+static void mark_new_fragments(Ui *ui, const Game *g) {
+    char buf[PARA_MAX];
+    FragSpan sp[FRAG_MAX];
+    size_t i;
+    size_t j;
+
+    ui->frag_hot_n = 0;
+    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX) == 0) {
+        return;
+    }
+    for (i = 0; i < FRAG_MAX; i++) {
+        if (sp[i].len == 0 && sp[i].off == 0 && i > 0) {
+            break;
+        }
+        for (j = 0; j < ui->frag_line_n; j++) {
+            if (ui->frag_line[j] == sp[i].line) {
+                break;
+            }
+        }
+        if (j == ui->frag_line_n && ui->frag_line_n < FRAG_MAX) {
+            /* Not seen before in this room, so it turned up because of the action. */
+            ui->frag_line[ui->frag_line_n++] = sp[i].line;
+            if (ui->frag_hot_n < FRAG_MAX) {
+                ui->frag_hot[ui->frag_hot_n++] = sp[i].line;
+            }
+        }
+    }
+}
+
+/* Entering a room is not news about that room, so nothing in it lights up. That means
+ * the room's own fragments have to be recorded as already shown, and they are: forget
+ * the marks without doing this and the first action taken inside the room finds every
+ * line of the description new, and the whole room turns colour. */
+static void note_room_fragments(Ui *ui, const Game *g) {
+    char buf[PARA_MAX];
+    FragSpan sp[FRAG_MAX];
+    size_t i;
+
+    ui->frag_line_n = 0;
+    ui->frag_hot_n = 0;
+    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX) == 0) {
+        return;
+    }
+    for (i = 0; i < FRAG_MAX && sp[i].len > 0; i++) {
+        if (ui->frag_line_n < FRAG_MAX) {
+            ui->frag_line[ui->frag_line_n++] = sp[i].line;
+        }
+    }
 }
 
 /* Band geometry for this frame.
@@ -895,6 +1009,7 @@ static void draw(Ui *ui) {
     const Game *g = ui->game;
     char para[PARA_MAX];
     char dpara[PARA_MAX];
+    char dpara2[PARA_MAX];
     size_t room = last_block(g, 1);
     size_t cmd = last_block(g, 0);
     size_t answer_n;
@@ -955,6 +1070,27 @@ static void draw(Ui *ui) {
      * once. Reading the log left the player looking at the room as it was on entry. */
     io_push_clip(c, (IoRect){ 0, L.desc_y, GAME_W, L.desc_h });
     if (desc_n > 0) {
+        Span hl[FRAG_MAX];
+        FragSpan sp[FRAG_MAX];
+        size_t hl_n = 0;
+        size_t si;
+        size_t k;
+
+        /* Which fragments arrived with the last command, as offsets into the text this
+         * frame draws. Rebuilt per frame, because the offsets move whenever the
+         * description is assembled differently. */
+        if (game_room_text_spans(g, dpara2, sizeof dpara2, sp, FRAG_MAX) == desc_n) {
+            for (si = 0; si < FRAG_MAX && sp[si].len > 0; si++) {
+                for (k = 0; k < ui->frag_hot_n; k++) {
+                    if (ui->frag_hot[k] == sp[si].line) {
+                        hl[hl_n].off = sp[si].off;
+                        hl[hl_n].len = sp[si].len;
+                        hl_n++;
+                        break;
+                    }
+                }
+            }
+        }
         int fit = (L.desc_h - 2 * PAD) / f->line_height;
         int32_t ex = MARGIN_X;
         int32_t ey = L.desc_y + PAD;
@@ -964,7 +1100,7 @@ static void draw(Ui *ui) {
         }
         ui->dscroll_want = text_tail(c, f, L.desc_y + PAD, fit, GAME_W - 2 * MARGIN_X,
                                      dpara, (uint32_t)desc_n, (uint32_t)desc_n, C_INK,
-                                     ui->dscroll, &ex, &ey);
+                                     ui->dscroll, hl, hl_n, C_HOT, &ex, &ey);
         if (!ui->animate) {
             /* The walkthrough must land on the frame the player would have seen. */
             ui->dscroll = ui->dscroll_want;
@@ -980,6 +1116,9 @@ static void draw(Ui *ui) {
      * reset it too. */
     if (room != ui->last_room) {
         ui->last_room = room;
+        /* A room just walked into is not news about itself, so nothing in it lights up;
+         * what lights up is what turns up later, while the player stays here. */
+        note_room_fragments(ui, g);
         ui->dscroll = 0.0;
         ui->dscroll_want = 0.0;
     }
@@ -1104,8 +1243,8 @@ static void draw(Ui *ui) {
         }
 
         ui->scroll_want = text_tail(c, f, top, fit, GAME_W - 2 * MARGIN_X, para,
-                                    (uint32_t)n, (uint32_t)vis, C_INK, ui->scroll,
-                                    &end_x, &end_y);
+                                    (uint32_t)n, (uint32_t)vis, C_INK, ui->scroll, NULL, 0,
+                                    C_INK, &end_x, &end_y);
         if (!ui->animate) {
             /* The walkthrough has to land on the tail of every answer, or the frame it
              * writes is not the frame the player would have seen. */
@@ -1657,6 +1796,7 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
             int at = node_at_depth(g_win, steps - step - 1);
 
             game_command(g, g_nodes[at].words, (size_t)g_nodes[at].word_len);
+            mark_new_fragments(ui, g);
         }
     }
     printf("кадров записано: %d\n", steps + 2);
@@ -1838,6 +1978,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     memset(&ui, 0, sizeof ui);
+    ui.last_room = (size_t)-1;   /* so the first frame counts as a room change */
     ui.ctx = &ctx;
     ui.font = &font;
     ui.game = &game;
@@ -1978,6 +2119,10 @@ int main(int argc, char **argv) {
                      * long a command is comes from the script, not from here. */
                     if (game_more(&game, ui.cmd.slot, (size_t)ui.cmd.filled) == 0) {
                         game_command(&game, ui.cmd.slot, (size_t)ui.cmd.filled);
+                        /* Whatever the command brought into the room description is
+                         * what the player should notice, so it is marked here and
+                         * stays marked until they do something else. */
+                        mark_new_fragments(&ui, &game);
                         ui.last = ui.cmd;
                         ui.have_last = 1;
                         ui.cmd.filled = 0;

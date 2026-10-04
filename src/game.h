@@ -91,7 +91,17 @@ void game_head(Game *g, const char *title, uint32_t title_len, const Sym *words,
 /* The current room's description as it stands now, not as it was written into the log
  * on entry. Writes at most cap bytes including the terminator and returns the length
  * written. */
+/* One fragment's place in the assembled description. "line" is the fragment's line in
+ * the script, which is the only stable name it has. */
+typedef struct FragSpan {
+    uint32_t off;
+    uint32_t len;
+    int line;
+} FragSpan;
+
 size_t game_room_text(const Game *g, char *out, size_t cap);
+size_t game_room_text_spans(const Game *g, char *out, size_t cap, FragSpan *spans,
+                            size_t span_cap);
 
 void game_enter(Game *g, Sym room);
 
