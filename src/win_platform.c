@@ -277,6 +277,30 @@ static int win_open(void *self, const char *title, int32_t w, int32_t h) {
         return 0;
     }
 
+    /* CreateWindowExW takes the OUTER size. Passing the size the canvas wants gives an
+     * outer window of that size, and the client area comes out smaller by the frame and
+     * the title bar: measured here, 1272x926 for a request of 1280x960. The canvas then
+     * scales by 1.9281 instead of 2, and nearest neighbour at a fractional scale
+     * duplicates some rows of pixels and skips others. On a sixteen pixel font that
+     * reads as letters cut in half, and it is Windows only because X11 hands back the
+     * size it was given.
+     *
+     * So ask for the window that yields the client area wanted, rather than asking for
+     * the client area and getting the frame as well. */
+    {
+        RECT want;
+
+        want.left = 0;
+        want.top = 0;
+        want.right = (LONG)w;
+        want.bottom = (LONG)h;
+        /* Converts in place: the client rectangle comes back as the outer one. */
+        if (AdjustWindowRectEx(&want, WS_OVERLAPPEDWINDOW, FALSE, 0) != FALSE) {
+            w = (int32_t)(want.right - want.left);
+            h = (int32_t)(want.bottom - want.top);
+        }
+    }
+
     st->hwnd = CreateWindowExW(0, k_class, L"quest", WS_OVERLAPPEDWINDOW,
                                CW_USEDEFAULT, CW_USEDEFAULT, (int)w, (int)h, NULL,
                                NULL, wc.hInstance, NULL);
