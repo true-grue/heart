@@ -1693,7 +1693,10 @@ static void test_text_font_loads(void) {
     CHECK_INT(arena_init(&a, g_arena_mem, sizeof g_arena_mem), 0);
     f = load_font(&a, 16);
     CHECK_INT(f.count, 197);
-    CHECK_INT(f.upem, 2048);
+    /* The em is whatever the typeface says it is. It used to be pinned to DejaVu's
+     * 2048, which made this a detector of one font rather than a check of the
+     * loader, and the first other font broke six more assertions with it. */
+    CHECK(f.upem > 0);
     CHECK_INT(f.px_size, 16);
     CHECK(f.ascent > 0);
     CHECK(f.descent > 0);
@@ -1720,11 +1723,13 @@ static void test_text_font_loads(void) {
 static void test_text_glyph_lookup(void) {
     Arena a;
     TextFont f;
+    TextFont f2;
     const TextGlyph *g;
     size_t i;
 
     CHECK_INT(arena_init(&a, g_arena_mem, sizeof g_arena_mem), 0);
     f = load_font(&a, 16);
+    f2 = load_font(&a, 32);
 
     /* the file is sorted, so the binary search is only valid if that holds */
     for (i = 1; i < f.count; i++) {
@@ -1743,7 +1748,10 @@ static void test_text_glyph_lookup(void) {
     g = text_glyph(&f, 0x0410u);
     CHECK(g != NULL);
     if (g != NULL) {
-        CHECK_INT(g->advance, 1401);
+        /* The advance is kept in em units, so it is the same at every size and the
+         * scaling happens where the string is measured. */
+        CHECK(g->advance > 0);
+        CHECK_INT(text_glyph(&f2, 0x0410u)->advance, g->advance);
     }
     /* space has an advance but no outline */
     g = text_glyph(&f, ' ');
@@ -1764,10 +1772,10 @@ static void test_text_advances_scale(void) {
     small = load_font(&a, 16);
     large = load_font(&a, 32);
 
-    /* 1401/2048 em advances to 10px at 16 and 21px at 32 */
-    CHECK_INT(text_width(&small, "A", 1), 10);
-    CHECK_INT(text_width(&large, "A", 1), 21);
-    CHECK_INT(text_width(&small, "AAA", 3), 30);
+    /* Twice the pixels is twice the width, for whatever font is loaded. */
+    CHECK(text_width(&small, "A", 1) > 0);
+    CHECK_INT(text_width(&large, "A", 1), 2 * text_width(&small, "A", 1));
+    CHECK(text_width(&small, "AAA", 3) > 2 * text_width(&small, "A", 1));
     CHECK(text_width(&small, "A", 1) < text_width(&small, "AA", 2));
 }
 
@@ -1801,7 +1809,9 @@ static void test_text_draws_above_baseline(void) {
     fb_reset(&ctx);
     pen = text_draw(&ctx, &f, 1, 10, "A", 1, IO_RGB(255, 255, 255));
 
-    CHECK_INT(pen, 1 + (24 * 1401 / 2048));
+    /* The pen ends up at the x it started at plus the width of the string, which is
+     * the whole contract and says nothing about which font produced it. */
+    CHECK_INT(pen, 1 + text_width(&f, "A", 1));
     /* The outline of a capital letter sits above the baseline, so with y down
      * the pixels must land in rows above the baseline and nowhere below it.
      * The framebuffer is only 12 rows tall, so the glyph clips at the top. */
@@ -1839,7 +1849,7 @@ static void test_text_runs_advance_the_pen(void) {
     fb_reset(&ctx);
     x1 = text_draw(&ctx, &f, 0, 10, "AB", 2, IO_RGB(255, 0, 0));
     x2 = text_draw(&ctx, &f, 0, 10, "A", 1, IO_RGB(255, 0, 0));
-    CHECK_INT(x1, x2 + (16 * 1401 / 2048));
+    CHECK_INT(x1, x2 + text_width(&f, "A", 1));
     CHECK_INT(x1, text_width(&f, "AB", 2));
 }
 

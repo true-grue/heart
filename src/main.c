@@ -1222,7 +1222,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "не удалось прочитать %s\n", def->path);
         return 1;
     }
-    if (text_font_load(&arena, &font, font_text, font_len, 18) != TEXT_OK) {
+    if (text_font_load(&arena, &font, font_text, font_len, 16) != TEXT_OK) {
         fprintf(stderr, "не удалось загрузить шрифт\n");
         return 1;
     }

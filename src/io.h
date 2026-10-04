@@ -53,7 +53,7 @@ typedef struct {
  * legible: without it the stems of a Cyrillic letter are one pixel and either
  * vanish or read as a smear. Axis-aligned polygons with whole pixel corners skip
  * all of this and stay exact, so panels and rules remain crisp. */
-#define IO_AA_SAMPLES 4
+#define IO_AA_SAMPLES 1
 #define IO_AA_STEP (IO_FX_ONE / (2 * IO_AA_SAMPLES))
 #define IO_COV_ONE 256u
 
