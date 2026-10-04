@@ -858,6 +858,23 @@ static Layout compute_layout(Ui *ui, const char *desc, uint32_t desc_len,
     return L;
 }
 
+/* The chosen words as slots. One function for both rows, because they were two copies
+ * of the same loop differing only in which array they read: the command being typed and
+ * the command that produced the answer still being written. A second copy is a second
+ * place to forget the label, the padding or the hit rectangle. */
+static int32_t draw_slots(Ui *ui, IoCtx *c, const TextFont *f, int32_t x, int32_t y,
+                          const Sym *slot, size_t filled) {
+    char label[LABEL_MAX];
+    size_t i;
+
+    for (i = 0; i < filled; i++) {
+        uint32_t len = chip_label(ui, slot[i], label, sizeof label);
+
+        x = draw_tile(c, f, x, y, label, len, 1);
+    }
+    return x;
+}
+
 static Layout layout_commands(Ui *ui, const char *desc, uint32_t desc_len,
                              const char *ans, uint32_t ans_n) {
     IoCtx *c = ui->ctx;
@@ -865,26 +882,17 @@ static Layout layout_commands(Ui *ui, const char *desc, uint32_t desc_len,
     Sym choices[MAX_CHOICES];
     int32_t x = MARGIN_X;
     size_t n = 0;
-    size_t i;
-    char label[LABEL_MAX];
     Layout L = compute_layout(ui, desc, desc_len, ans, ans_n);
 
     if (!ui->done && ui->have_last) {
         /* While the answer is still being written, the command that caused it stays in
          * full. Clearing the row the moment the command runs throws away the object,
          * which is the part the player is least likely to remember. */
-        for (i = 0; i < (size_t)ui->last.filled; i++) {
-            uint32_t len = chip_label(ui, ui->last.slot[i], label, sizeof label);
-
-            x = draw_tile(c, f, x, L.tile_y, label, len, 1);
-        }
+        (void)draw_slots(ui, c, f, x, L.tile_y, ui->last.slot,
+                         (size_t)ui->last.filled);
         return L;
     }
-    for (i = 0; i < (size_t)ui->cmd.filled; i++) {
-        uint32_t len = chip_label(ui, ui->cmd.slot[i], label, sizeof label);
-
-        x = draw_tile(c, f, x, L.tile_y, label, len, 1);
-    }
+    x = draw_slots(ui, c, f, x, L.tile_y, ui->cmd.slot, (size_t)ui->cmd.filled);
     {
         static const char pick[] = "?";
 

@@ -111,7 +111,7 @@ $(CONFIG):
 
 DEP := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(AN_OBJ:.o=.d)
 
-.PHONY: all test parity complexity analyze demo demo-asan win clean $(GAMES)
+.PHONY: all test parity complexity duplicates analyze demo demo-asan win clean $(GAMES)
 
 all: $(LIB)
 
@@ -178,6 +178,19 @@ parity:
 complexity:
 	@command -v lizard >/dev/null 2>&1 || { echo "пропуск: нет lizard (pip install lizard)"; exit 1; }
 	lizard -C 15 -w src
+
+# Duplication over src, three clone kinds at once: exact, renamed (--ignore-identifiers)
+# and near-miss with up to three changed lines (--max-gap-lines). Semantic clones need a
+# 548 MB model download and are experimental for C, so they are not here.
+#
+# The baseline makes this a gate on NEW duplication. Without it the target would fail on
+# the 302 lines that already exist and nobody would ever run it.
+duplicates:
+	@command -v jscpd >/dev/null 2>&1 || { echo "пропуск: нет jscpd (pip install jscpd)"; exit 1; }
+	jscpd src --threshold 5 --min-lines 6 --min-tokens 50 \
+	    --ignore-identifiers --max-gap-lines 3 --no-tips
+	@echo "нового дублирования относительно .jscpd-baseline.json:"
+	jscpd src --baseline .jscpd-baseline.json --fail-on-new-clones --no-tips
 
 analyze: $(AN_OBJ)
 

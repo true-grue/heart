@@ -1,5 +1,6 @@
 #include "font.h"
 
+#include "cur.h"
 #include "utf8.h"
 
 #include <string.h>
@@ -8,12 +9,6 @@
  * to fill. Glyphs arrive sorted by codepoint, so lookup is a binary search and no
  * sorting code is needed here. */
 
-typedef struct Cur {
-    const char *p;
-    const char *end;
-    int line;
-} Cur;
-
 static const char *skip_ws(const char *p, const char *end) {
     while (p < end && (*p == ' ' || *p == '\t')) {
         p++;
@@ -21,27 +16,6 @@ static const char *skip_ws(const char *p, const char *end) {
     return p;
 }
 
-static int next_line(Cur *c, const char **ls, size_t *llen) {
-    while (c->p < c->end) {
-        const char *start = c->p;
-        const char *nl = (const char *)memchr(start, '\n', (size_t)(c->end - start));
-        const char *stop = (nl != NULL) ? nl : c->end;
-
-        c->line++;
-        if (stop > start && stop[-1] == '\r') {
-            stop--;
-        }
-        c->p = (nl != NULL) ? nl + 1 : c->end;
-
-        if (stop == start || *start == '#') {
-            continue;
-        }
-        *ls = start;
-        *llen = (size_t)(stop - start);
-        return 1;
-    }
-    return 0;
-}
 
 /* Reads up to max integers from a line of whitespace separated numbers. */
 static int read_numbers(const char *s, size_t n, int32_t *out, int max, int *got) {
@@ -92,7 +66,7 @@ static size_t count_glyphs(const char *text, size_t len) {
     c.p = text;
     c.end = text + len;
     c.line = 0;
-    while (next_line(&c, &s, &l)) {
+    while (cur_next_line(&c, &s, &l)) {
         if (AFTER_KEY(s, l, "glyph ") != NULL) {
             n++;
         }
@@ -125,7 +99,7 @@ TextStatus text_font_load(Arena *a, TextFont *out, const char *text, size_t len,
     c.p = text;
     c.end = text + len;
     c.line = 0;
-    while (next_line(&c, &s, &l)) {
+    while (cur_next_line(&c, &s, &l)) {
         const char *after = AFTER_KEY(s, l, "font ");
         if (after != NULL) {
             if (!read_numbers(after, (size_t)(s + l - after), num, 1, &got) || got != 1) {
@@ -197,7 +171,7 @@ TextStatus text_font_load(Arena *a, TextFont *out, const char *text, size_t len,
     c.p = text;
     c.end = text + len;
     c.line = 0;
-    while (next_line(&c, &s, &l)) {
+    while (cur_next_line(&c, &s, &l)) {
         const char *after = AFTER_KEY(s, l, "glyph ");
         IoSeg *segs;
         uint32_t seg_count;
@@ -227,7 +201,7 @@ TextStatus text_font_load(Arena *a, TextFont *out, const char *text, size_t len,
         for (k = 0; k < seg_count; k++) {
             const char *ls;
             size_t ll;
-            if (!next_line(&c, &ls, &ll)) {
+            if (!cur_next_line(&c, &ls, &ll)) {
                 return TEXT_E_SYNTAX;
             }
             if (!read_numbers(ls, ll, num, 4, &got) || got != 4) {

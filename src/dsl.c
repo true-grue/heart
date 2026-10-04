@@ -1,5 +1,6 @@
 #include "dsl.h"
 
+#include "cur.h"
 #include "utf8.h"
 
 #include <string.h>
@@ -53,12 +54,6 @@ typedef struct Parse {
     Sym start;
     int have_start;
 } Parse;
-
-typedef struct Cur {
-    const char *p;
-    const char *end;
-    int line;
-} Cur;
 
 /* --------------------------------------------------------------- cursor --- */
 
@@ -135,27 +130,6 @@ static const char *read_word(const char *p, const char *end, const char **ws, si
 }
 
 /* Next meaningful line: blank lines and lines starting with '#' are skipped. */
-static int cur_line(Cur *c, const char **ls, size_t *llen) {
-    while (c->p < c->end) {
-        const char *start = c->p;
-        const char *nl = (const char *)memchr(start, '\n', (size_t)(c->end - start));
-        const char *stop = (nl != NULL) ? nl : c->end;
-
-        c->line++;
-        if (stop > start && stop[-1] == '\r') {
-            stop--;
-        }
-        c->p = (nl != NULL) ? nl + 1 : c->end;
-
-        if (stop == start || *start == '#') {
-            continue;
-        }
-        *ls = start;
-        *llen = (size_t)(stop - start);
-        return 1;
-    }
-    return 0;
-}
 
 /* ----------------------------------------------------------------- syms --- */
 
@@ -494,7 +468,7 @@ static ScriptStatus run_pass(Parse *P, const char *text, size_t len, int *err_li
     c.end = text + len;
     c.line = 0;
 
-    while (cur_line(&c, &s, &n)) {
+    while (cur_next_line(&c, &s, &n)) {
         ScriptStatus st = parse_line(P, s, n, &in_room, c.line);
         if (st != SCR_OK) {
             if (err_line != NULL) {
