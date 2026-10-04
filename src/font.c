@@ -1,6 +1,6 @@
-#include "text/font.h"
+#include "font.h"
 
-#include "core/utf8.h"
+#include "utf8.h"
 
 #include <string.h>
 

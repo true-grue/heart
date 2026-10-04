@@ -1,8 +1,8 @@
-#include "io/io.h"
+#include "io.h"
 
 #ifdef IO_X11
 
-#include "core/utf8.h"
+#include "utf8.h"
 
 #include <poll.h>
 #include <X11/Xlib.h>

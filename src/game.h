@@ -1,8 +1,8 @@
 #ifndef GAME_GAME_H
 #define GAME_GAME_H
 
-#include "core/arena.h"
-#include "dsl/dsl.h"
+#include "arena.h"
+#include "dsl.h"
 
 #include <stddef.h>
 #include <stdint.h>

@@ -1,8 +1,8 @@
 #ifndef TEXT_FONT_H
 #define TEXT_FONT_H
 
-#include "core/arena.h"
-#include "io/io.h"
+#include "arena.h"
+#include "io.h"
 
 #include <stddef.h>
 #include <stdint.h>

@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 199309L
 
-#include "io/io.h"
-#include "text/font.h"
+#include "io.h"
+#include "font.h"
 
 #include <stdio.h>
 #include <stdlib.h>

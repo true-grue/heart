@@ -21,17 +21,17 @@ AOBJ  := $(BUILD)/an
 DOBJ  := $(BUILD)/dobj
 
 # Списки исходников явные: детерминированный порядок линковки, без $(shell find).
-LIB_SRC  := src/core/arena.c \
-            src/core/utf8.c \
-            src/dsl/dsl.c \
-            src/game/game.c \
-            src/io/io.c \
-            src/platform/test.c \
-            src/text/font.c
+LIB_SRC  := src/arena.c \
+            src/utf8.c \
+            src/dsl.c \
+            src/game.c \
+            src/io.c \
+            src/test_platform.c \
+            src/font.c
 
 # The X11 backend is the only part outside the engine that links a system library.
 # Windows and Web backends will use their own platform interfaces instead.
-X11_SRC  := src/platform/x11.c
+X11_SRC  := src/x11_platform.c
 X11_FLAGS := -DIO_X11
 X11_LIBS := -lX11
 HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null >/dev/null 2>&1 && echo 1)
@@ -42,15 +42,15 @@ CFLAGS_X  := $(X11_FLAGS)
 LDFLAGS_X := $(X11_LIBS)
 endif
 
-HDRS := src/core/arena.h \
-        src/core/utf8.h \
-        src/game/game.h \
-        src/io/io.h \
-        src/dsl/dsl.h \
-        src/platform/test.h \
-        src/text/font.h
+HDRS := src/arena.h \
+        src/utf8.h \
+        src/game.h \
+        src/io.h \
+        src/dsl.h \
+        src/test_platform.h \
+        src/font.h
 
-STRESS_SRC := src/stress.c
+STRESS_SRC := tests/stress.c
 QUEST_SRC := src/main.c
 STRESS   := $(BUILD)/stress
 QUEST    := $(BUILD)/quest

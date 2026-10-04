@@ -1,11 +1,11 @@
 #define _POSIX_C_SOURCE 199309L
 
-#include "core/arena.h"
-#include "core/utf8.h"
-#include "game/game.h"
-#include "io/io.h"
-#include "platform/test.h"
-#include "text/font.h"
+#include "arena.h"
+#include "utf8.h"
+#include "game.h"
+#include "io.h"
+#include "test_platform.h"
+#include "font.h"
 
 #include <stdio.h>
 #include <stdlib.h>

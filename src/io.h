@@ -1,7 +1,7 @@
 #ifndef IO_IO_H
 #define IO_IO_H
 
-#include "core/arena.h"
+#include "arena.h"
 
 #include <stddef.h>
 #include <stdint.h>

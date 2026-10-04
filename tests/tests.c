@@ -1,12 +1,12 @@
 #include "test.h"
 
-#include "core/arena.h"
-#include "core/utf8.h"
-#include "io/io.h"
-#include "platform/test.h"
-#include "text/font.h"
-#include "dsl/dsl.h"
-#include "game/game.h"
+#include "arena.h"
+#include "utf8.h"
+#include "io.h"
+#include "test_platform.h"
+#include "font.h"
+#include "dsl.h"
+#include "game.h"
 
 #include <stdint.h>
 #include <stdio.h>

@@ -1,6 +1,6 @@
-#include "dsl/dsl.h"
+#include "dsl.h"
 
-#include "core/utf8.h"
+#include "utf8.h"
 
 #include <string.h>
 

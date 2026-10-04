@@ -1,4 +1,4 @@
-#include "core/utf8.h"
+#include "utf8.h"
 
 size_t utf8_decode(const uint8_t *p, size_t avail, uint32_t *cp) {
     uint8_t b0;

@@ -1,7 +1,7 @@
 #ifndef PLATFORM_TEST_H
 #define PLATFORM_TEST_H
 
-#include "io/io.h"
+#include "io.h"
 
 /* The backend the tests and the walkthrough run on: no window, present is a no-op,
  * no events. The whole drawing path therefore runs with no display at all.

@@ -1,7 +1,7 @@
 #ifndef DSL_DSL_H
 #define DSL_DSL_H
 
-#include "core/arena.h"
+#include "arena.h"
 
 #include <stddef.h>
 #include <stdint.h>

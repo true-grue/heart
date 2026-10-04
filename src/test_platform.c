@@ -1,4 +1,4 @@
-#include "platform/test.h"
+#include "test_platform.h"
 
 static int test_open(void *self, const char *title, int32_t w, int32_t h) {
     (void)self;
