@@ -469,7 +469,7 @@ static int32_t chip_w(const TextFont *f, const char *label, uint32_t len) {
  * Room for that chip is reserved from the first chip on, otherwise the row fills the
  * width completely and there is nowhere left to admit the loss. */
 static size_t draw_chip_row(IoCtx *c, Ui *ui, const TextFont *f, int32_t y, int32_t h,
-                            const Sym *syms, size_t n, int kind) {
+                            const Sym *syms, size_t n, int kind, int32_t *end_x) {
     int32_t x = MARGIN_X;
     char label[64];
     size_t i;
@@ -493,6 +493,9 @@ static size_t draw_chip_row(IoCtx *c, Ui *ui, const TextFont *f, int32_t y, int3
         add_hit(ui, r, kind, syms[i]);
         x += w + CHIP_GAP;
         shown++;
+    }
+    if (end_x != NULL) {
+        *end_x = x;
     }
     if (shown < n) {
         char more[8];
@@ -613,7 +616,7 @@ static void layout_commands(Ui *ui) {
         text_at(c, f, MARGIN_X, PICK_Y + (TILE_H - f->line_height) / 2, none,
                 (uint32_t)(sizeof none - 1), C_DIM);
     }
-    (void)draw_chip_row(c, ui, f, PICK_Y, TILE_H, choices, n, HIT_WORD);
+    (void)draw_chip_row(c, ui, f, PICK_Y, TILE_H, choices, n, HIT_WORD, &pick_x);
     if (ui->cmd.filled > 0) {
         static const char back[] = "назад";
         int32_t w = chip_w(f, back, (uint32_t)(sizeof back - 1));
