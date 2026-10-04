@@ -1340,12 +1340,24 @@ static void test_io_pointer_agrees_with_scaling(void) {
     ctx.pixels[(size_t)6 * ctx.w + 8] = 0x00ABCDEFu;
     io_scale_canvas(&ctx, out, 20, 20);
 
-    for (y = 0; y < 20 && wy < 0; y++) {
-        for (x = 0; x < 20; x++) {
-            if (out[(size_t)y * 20 + x] == 0x00ABCDEFu) {
-                wx = x;
-                wy = y;
-                break;
+    /* Found by how far the pixel is from the background, not by exact equality: at a
+     * fractional scale the scaler averages, so a lone pixel comes out blended with its
+     * neighbours and never keeps its own colour. The point of the test is that the
+     * window position maps back to the canvas pixel that was drawn, and that still has
+     * a single answer even though the colour does not survive intact. */
+    {
+        uint32_t best = 0;
+
+        for (y = 0; y < 20; y++) {
+            for (x = 0; x < 20; x++) {
+                uint32_t p = out[(size_t)y * 20 + x];
+                uint32_t d = (p > 0x00010101u ? p - 0x00010101u : 0x00010101u - p);
+
+                if (d > best) {
+                    best = d;
+                    wx = x;
+                    wy = y;
+                }
             }
         }
     }
@@ -1353,6 +1365,37 @@ static void test_io_pointer_agrees_with_scaling(void) {
     io_to_virtual(&ctx, wx, wy, &vx, &vy);
     CHECK_INT(vx, 8);
     CHECK_INT(vy, 6);
+}
+
+/* A whole-number scale must stay an exact doubling.
+ *
+ * The scaler averages, because at a fractional scale nearest neighbour has to stretch
+ * some source pixels and drop others and a sixteen pixel font comes out with letters cut
+ * in half. But averaging must not touch the case where there is nothing to average: at
+ * twice the size every destination pixel covers exactly one source pixel, and if that
+ * stops being true the whole interface goes soft at the size it is normally opened. */
+static void test_io_integer_scale_is_exact(void) {
+    IoCtx ctx;
+    uint32_t pixels[4 * 4];
+    uint32_t out[8 * 8];
+    int32_t x, y;
+
+    io_init(&ctx, pixels, 4, 4);
+    for (y = 0; y < 4; y++) {
+        for (x = 0; x < 4; x++) {
+            ctx.pixels[(size_t)y * 4 + x] = 0x00112233u + (uint32_t)(y * 4 + x) * 0x00010101u;
+        }
+    }
+    memset(out, 0, sizeof out);
+    io_scale_canvas(&ctx, out, 8, 8);
+
+    for (y = 0; y < 8; y++) {
+        for (x = 0; x < 8; x++) {
+            uint32_t want = ctx.pixels[(size_t)(y / 2) * 4 + (x / 2)];
+
+            CHECK_INT(out[(size_t)y * 8 + x], (int32_t)want);
+        }
+    }
 }
 
 static void test_io_drag_origin_is_kept(void) {
@@ -1955,6 +1998,7 @@ const test_case test_cases[] = {
     TEST_CASE(test_io_event_queue_survives_poll),
     TEST_CASE(test_io_pointer_converts_to_virtual),
     TEST_CASE(test_io_pointer_agrees_with_scaling),
+    TEST_CASE(test_io_integer_scale_is_exact),
     TEST_CASE(test_io_drag_origin_is_kept),
     TEST_CASE(test_io_event_ring_counts_overflow),
     TEST_CASE(test_io_scale_preserves_aspect),
