@@ -846,23 +846,23 @@ static void draw(Ui *ui) {
  *
  * It runs on the test backend: no window, no events, only the framebuffer. */
 
-#define WALK_MAX_SEEN 4096
-#define WALK_MAX_DEPTH 64
+#define WALK_MAX_SEEN 8192
 
-typedef struct Seen {
+/* One queue entry per state, holding the command that reached it and the entry it came
+ * from. Breadth first, so the first win found is the shortest route there is, and a
+ * state is never pruned for sitting deep: depth first used to walk into a long branch,
+ * hit the depth cap and come back without ever trying the way to the win. */
+typedef struct Node {
     GameState st;
-} Seen;
+    int parent;
+    uint8_t word_len;
+    Sym words[RULE_MAX_WORDS];
+} Node;
 
-static Seen g_seen[WALK_MAX_SEEN];
-static size_t g_seen_n;
-/* One command per depth, as the words the player chose. The prefix of the node at
- * depth is the first depth words of the row above it, so the walk reads the path the
- * same way the palette built it. */
-static Sym g_path_words[WALK_MAX_DEPTH][RULE_MAX_WORDS];
-static int g_path_cmd_len[WALK_MAX_DEPTH];
-static int g_path_len;
-static int g_found;
-
+static Node g_nodes[WALK_MAX_SEEN];
+static size_t g_nodes_n;
+static size_t g_head;
+static int g_win;
 static int same_state(const GameState *a, const GameState *b) {
     size_t i;
 
@@ -878,84 +878,95 @@ static int same_state(const GameState *a, const GameState *b) {
     return 1;
 }
 
+/* The queue entry that is `depth` commands before the winning one, following parents
+ * back. The replay needs them in order and the chain only goes backwards. */
+static int node_at_depth(int win, int depth) {
+    int n = win;
+
+    while (n > 0) {
+        n = g_nodes[n].parent;
+        if (--depth == 0) {
+            return n;
+        }
+    }
+    return win;
+}
+
 static int already_seen(const GameState *st) {
     size_t i;
 
-    for (i = 0; i < g_seen_n; i++) {
-        if (same_state(&g_seen[i].st, st)) {
+    /* The whole queue, not just the expanded part. A state is room plus flags and that
+     * is the whole of what the future depends on, so a second route to it cannot offer
+     * anything the first did not. */
+    for (i = 0; i < g_nodes_n; i++) {
+        if (same_state(&g_nodes[i].st, st)) {
             return 1;
         }
     }
     return 0;
 }
 
-static void remember(const GameState *st) {
-    if (g_seen_n < WALK_MAX_SEEN) {
-        g_seen[g_seen_n].st = *st;
-        g_seen_n++;
-    }
-}
-
-/* Depth first, one call per step. The path already on the stack is in the seen
- * set, so a state met again from deeper is simply not entered. */
-/* ci is which command of the path is being built, wi is how many words of it are
- * already chosen. They are two different things: a command can be any number of
- * words long, so one index cannot be both the step in the path and the place in the
- * sentence. */
-static void explore(Game *g, int ci, int wi) {
-    GameState here;
+/* Enumerates the commands available from a state, a word at a time, the same way the
+ * palette does, and pushes every resulting state onto the queue. Runs on a scratch
+ * restore of the base state, because game_next and game_more both read the state that
+ * is current and a command has just changed it. */
+static void try_words(Game *g, const GameState *base, int parent, const Sym *prefix,
+                      int wi) {
     Sym choices[MAX_CHOICES];
-    Sym prefix[RULE_MAX_WORDS];
-    size_t got;
-    size_t i;
+    Sym buf[RULE_MAX_WORDS];
+    size_t got, i;
 
-    if (g_found || ci >= WALK_MAX_DEPTH || wi >= (int)RULE_MAX_WORDS) {
+    if (g_win >= 0 || wi >= (int)RULE_MAX_WORDS || g_nodes_n >= WALK_MAX_SEEN) {
         return;
     }
-    game_save(g, &here);
     if (wi > 0) {
-        memcpy(prefix, g_path_words[ci], sizeof prefix);
+        memcpy(buf, prefix, sizeof buf);
     }
-    got = game_next(g, (wi > 0) ? prefix : NULL, (size_t)wi, choices, MAX_CHOICES);
-    for (i = 0; i < got && !g_found; i++) {
-        GameState after;
+    got = game_next(g, (wi > 0) ? buf : NULL, (size_t)wi, choices, MAX_CHOICES);
+    for (i = 0; i < got && g_win < 0; i++) {
+        Sym w[RULE_MAX_WORDS];
 
-        g_path_words[ci][wi] = choices[i];
-
-        if (game_more(g, g_path_words[ci], (size_t)wi + 1) > 0) {
-            /* More words go after this one, so nothing has happened yet and there is
-             * no new state to remember. This is the same command the player is still
-             * in the middle of typing. */
-            explore(g, ci, wi + 1);
-            game_restore(g, &here);
+        /* The previous candidate left the game somewhere else entirely, and both
+         * game_more and game_command read the state that is current. */
+        game_restore(g, base);
+        if (wi > 0) {
+            memcpy(w, prefix, sizeof w);
+        }
+        w[wi] = choices[i];
+        if (game_more(g, w, (size_t)wi + 1) > 0) {
+            try_words(g, base, parent, w, wi + 1);
             continue;
         }
-        /* The word ended the command. A command the game will not take is not a
-         * branch. */
-        game_restore(g, &here);
-        if (!game_command(g, g_path_words[ci], (size_t)wi + 1)) {
+        if (!game_command(g, w, (size_t)wi + 1)) {
             continue;
         }
         if (g->won) {
-            g_path_cmd_len[ci] = wi + 1;
-            g_path_len = ci + 1;
-            g_found = 1;
+            memcpy(g_nodes[g_nodes_n].words, w, sizeof w);
+            g_nodes[g_nodes_n].word_len = (uint8_t)(wi + 1);
+            g_nodes[g_nodes_n].parent = parent;
+            g_nodes_n++;
+            g_win = (int)g_nodes_n - 1;
             return;
         }
         if (g->finished) {
             continue;
         }
-        game_save(g, &after);
-        if (already_seen(&after)) {
-            continue;
+        {
+            GameState after;
+
+            game_save(g, &after);
+            if (already_seen(&after)) {
+                continue;
+            }
+            memcpy(g_nodes[g_nodes_n].words, w, sizeof w);
+            g_nodes[g_nodes_n].word_len = (uint8_t)(wi + 1);
+            g_nodes[g_nodes_n].parent = parent;
+            g_nodes[g_nodes_n].st = after;
+            g_nodes_n++;
         }
-        remember(&after);
-        g_path_cmd_len[ci] = wi + 1;
-        g_path_len = ci + 1;
-        explore(g, ci + 1, 0);
-        game_restore(g, &here);
     }
 }
+
 
 static void dump_ppm(const char *path, const uint32_t *px, int w, int h) {
     FILE *f = fopen(path, "wb");
@@ -983,34 +994,61 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
     char path[1024];
     GameState start;
     int step;
+    int steps = 0;
 
-    g_seen_n = 0;
-    g_found = 0;
-    g_path_len = 0;
+    g_nodes_n = 0;
+    g_head = 0;
+    g_win = -1;
     game_save(g, &start);
-    remember(&start);
-    explore(g, 0, 0);
-    if (!g_found) {
+    g_nodes[0].st = start;
+    g_nodes[0].parent = -1;
+    g_nodes[0].word_len = 0;
+    g_nodes_n = 1;
+
+    while (g_head < g_nodes_n && g_win < 0) {
+        game_restore(g, &g_nodes[g_head].st);
+        try_words(g, &g_nodes[g_head].st, (int)g_head, NULL, 0);
+        g_head++;
+    }
+    if (g_win < 0) {
         fprintf(stderr, "этим скриптом нельзя выиграть\n");
         return 3;
     }
 
-    path[0] = '\0';
-    for (step = 0; step < g_path_len; step++) {
-        size_t at = strlen(path);
-        int k;
+    /* Walk the parent chain back from the winning state. Breadth first means this is
+     * the shortest route, which is the one worth printing for a person to read. */
+    {
+        int n;
 
-        snprintf(path + at, sizeof path - at, "%s", (step ? "\n  " : ""));
-        for (k = 0; k < g_path_cmd_len[step]; k++) {
-            size_t wl;
-            const char *w = script_sym(s, g_path_words[step][k], &wl);
-            size_t tail = strlen(path);
-
-            snprintf(path + tail, sizeof path - tail, "%s%.*s", (k ? " " : ""),
-                     (int)wl, w);
+        for (n = g_win; n > 0; n = g_nodes[n].parent) {
+            steps++;
         }
+        path[0] = '\0';
+        {
+            int idx[WALK_MAX_SEEN];
+            int m = 0;
+
+            for (n = g_win; n > 0; n = g_nodes[n].parent) {
+                idx[m++] = n;
+            }
+            for (n = m - 1; n >= 0; n--) {
+                size_t at = strlen(path);
+                int k;
+
+                snprintf(path + at, sizeof path - at, "%s", (n == m - 1 ? "" : "\n  "));
+                for (k = 0; k < (int)g_nodes[idx[n]].word_len; k++) {
+                    size_t wl;
+                    const char *w = script_sym(s, g_nodes[idx[n]].words[k], &wl);
+                    size_t tail = strlen(path);
+
+                    snprintf(path + tail, sizeof path - tail, "%s%.*s",
+                             (k ? " " : ""), (int)wl, w);
+                }
+            }
+        }
+        printf("прохождение (%d шагов):\n  %s\n", steps, path);
+        step = steps;
     }
-    printf("прохождение (%d шагов):\n  %s\n", g_path_len, path);
     {
         FILE *f = fopen("walkthrough.txt", "w");
         if (f != NULL) {
@@ -1019,25 +1057,25 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
         }
     }
 
-    /* Replay it once, drawing every step. A walkthrough the graph accepts but the
-     * screen cannot show is not a walkthrough. */
+    /* Replay it along the parent chain, drawing every step. A walkthrough the graph
+     * accepts but the screen cannot show is not a walkthrough. */
     game_init(g, s);
     ui->cmd.filled = 0;
-    for (step = 0; step <= g_path_len; step++) {
+    for (step = 0; step <= steps; step++) {
         char name[512];
-
+        int at = node_at_depth(g_win, step);
         ui->typed = 1.0e9;   /* no animation: the frames have to be comparable */
         ui->animate = 0;
         ui->done = 1;
         draw(ui);
         snprintf(name, sizeof name, "%s/frame%02d.ppm", dir, step);
         dump_ppm(name, ui->ctx->pixels, ui->ctx->w, ui->ctx->h);
-        if (step == g_path_len) {
+        if (step == steps) {
             break;
         }
-        game_command(g, g_path_words[step], (size_t)g_path_cmd_len[step]);
+        game_command(g, g_nodes[at].words, (size_t)g_nodes[at].word_len);
     }
-    printf("кадров записано: %d\n", g_path_len + 1);
+    printf("кадров записано: %d\n", steps + 1);
     return 0;
 }
 
