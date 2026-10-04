@@ -1,0 +1,41 @@
+; The script DSL, and nothing else. This file is the single source: doc/grammar.md
+; explains it in prose and must not restate it, and src/dsl/ implements it. A
+; disagreement between this file and the parser is a bug, and every production here
+; has a test in tests/tests.c named after it.
+
+script      = { line } ;
+
+line        = blank | comment | directive | room | rule ;
+
+comment     = "#" { any } NL ;
+directive   = "start" WS word NL ;
+room        = "room" WS word WS text NL ;
+
+; The whole format. word* is greedy and stops at the first sign or at the colon, so
+; "no bare word in the head" is what makes a rule a description of the room.
+rule        = word* item* ":" item* action NL ;
+
+word*       = { WS word } ;
+item*       = { WS item } ;
+
+word        = { letter | digit | "_" } ;
+
+; One item, both sides. Before the colon it asks for the flag to be there or not to be;
+; after the colon it puts the flag there or takes it away. A command that drops what it
+; was holding is as ordinary as one that picks it up, and a separate word for the
+; effect case only invited the grammar to promise something the loader could not do.
+item        = ( "+" | "-" ) word ;
+
+; The text after a cmd is optional. The converted games contain 51 lines that are a
+; bare "go room", so requiring text here would reject real scripts.
+action      = cmd [ WS text ]
+            | text ;
+
+cmd         = "go" WS word
+            | "end"
+            | "win" ;
+
+text        = { any } up to NL ;
+blank       = { WS } NL ;
+WS          = " " | "\t" ;
+NL          = "\n" | "\r\n" ;
