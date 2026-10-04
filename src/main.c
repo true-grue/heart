@@ -568,9 +568,15 @@ static int32_t draw_tile(IoCtx *c, const TextFont *f, int32_t x, int32_t y,
 /* How many rows of chips these words need at this width, measured with the same
  * arithmetic the drawing uses so the band is never sized for one arrangement and drawn
  * for another. The reserve at the right end is what leaves room for a "+N". */
+/* Does the next chip start a new row? One predicate, because measuring and drawing
+ * must agree and there is no test in the world that catches them disagreeing: the band
+ * would simply be the wrong height, and the screen would look plausible. */
+static int chip_wraps(int32_t x, int32_t w) {
+    return x > 0 && x + CHIP_GAP + w > GAME_W - MARGIN_X - CHIP_ROW_RESERVE;
+}
+
 static int32_t chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size_t n,
                                 const char *trailing) {
-    int32_t usable = GAME_W - MARGIN_X - CHIP_ROW_RESERVE;
     int32_t x = 0;
     int32_t rows = 1;
     char label[LABEL_MAX];
@@ -580,7 +586,7 @@ static int32_t chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size
         uint32_t len = chip_label(ui, syms[i], label, sizeof label);
         int32_t w = chip_w(f, label, len);
 
-        if (x > 0 && x + CHIP_GAP + w > usable) {
+        if (chip_wraps(x, w)) {
             rows++;
             x = 0;
         }
@@ -589,7 +595,7 @@ static int32_t chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size
     if (trailing != NULL) {
         int32_t w = chip_w(f, trailing, (uint32_t)strlen(trailing));
 
-        if (x > 0 && x + CHIP_GAP + w > usable) {
+        if (chip_wraps(x, w)) {
             rows++;
         }
     }
@@ -602,7 +608,6 @@ static int32_t chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size
 static int32_t draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
                               const Sym *syms, size_t n, int kind,
                               const char *trailing) {
-    int32_t usable = GAME_W - MARGIN_X - CHIP_ROW_RESERVE;
     int32_t x = MARGIN_X;
     int32_t rows = 1;
     char label[LABEL_MAX];
@@ -612,7 +617,7 @@ static int32_t draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
         uint32_t len = chip_label(ui, syms[i], label, sizeof label);
         int32_t w = chip_w(f, label, len);
 
-        if (x > 0 && x + CHIP_GAP + w > usable) {
+        if (chip_wraps(x, w)) {
             rows++;
             x = MARGIN_X;
             y += CHIP_H + CHIP_GAP;
@@ -632,7 +637,7 @@ static int32_t draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
         uint32_t len = (uint32_t)strlen(trailing);
         int32_t w = chip_w(f, trailing, len);
 
-        if (x > 0 && x + CHIP_GAP + w > usable) {
+        if (chip_wraps(x, w)) {
             rows++;
             x = MARGIN_X;
             y += CHIP_H + CHIP_GAP;

@@ -63,9 +63,7 @@ static size_t count_glyphs(const char *text, size_t len) {
     size_t l;
     size_t n = 0;
 
-    c.p = text;
-    c.end = text + len;
-    c.line = 0;
+    cur_init(&c, text, len);
     while (cur_next_line(&c, &s, &l)) {
         if (AFTER_KEY(s, l, "glyph ") != NULL) {
             n++;
@@ -96,9 +94,7 @@ TextStatus text_font_load(Arena *a, TextFont *out, const char *text, size_t len,
     }
     memset(out, 0, sizeof *out);
 
-    c.p = text;
-    c.end = text + len;
-    c.line = 0;
+    cur_init(&c, text, len);
     while (cur_next_line(&c, &s, &l)) {
         const char *after = AFTER_KEY(s, l, "font ");
         if (after != NULL) {
@@ -168,9 +164,7 @@ TextStatus text_font_load(Arena *a, TextFont *out, const char *text, size_t len,
         out->line_height = px_size;
     }
 
-    c.p = text;
-    c.end = text + len;
-    c.line = 0;
+    cur_init(&c, text, len);
     while (cur_next_line(&c, &s, &l)) {
         const char *after = AFTER_KEY(s, l, "glyph ");
         IoSeg *segs;

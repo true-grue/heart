@@ -464,9 +464,7 @@ static ScriptStatus run_pass(Parse *P, const char *text, size_t len, int *err_li
     size_t n;
     int in_room = 0;
 
-    c.p = text;
-    c.end = text + len;
-    c.line = 0;
+    cur_init(&c, text, len);
 
     while (cur_next_line(&c, &s, &n)) {
         ScriptStatus st = parse_line(P, s, n, &in_room, c.line);

@@ -18,6 +18,15 @@ typedef struct Cur {
     int line;
 } Cur;
 
+/* Starts a cursor over a buffer. Written here because setting up a walk over text was
+ * also repeated: a field added to Cur would otherwise have to be added at every call
+ * site, and one of them would be forgotten. */
+static inline void cur_init(Cur *c, const char *text, size_t len) {
+    c->p = text;
+    c->end = text + len;
+    c->line = 0;
+}
+
 /* Advances to the next line that carries something: blank lines and comments are
  * skipped. Returns 0 at the end of the buffer. */
 static inline int cur_next_line(Cur *c, const char **ls, size_t *llen) {
