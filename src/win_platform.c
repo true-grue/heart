@@ -125,6 +125,49 @@ static void win_pointer(WinState *st, IoEventKind kind, LPARAM lp, int device) {
     io_post_event(st->ctx, &ev);
 }
 
+/* Declaring the process DPI-aware before the first window exists.
+ *
+ * Without this, on a display that is not at 100%, Windows stretches the whole window as
+ * a bitmap on top of the scaling io_scale_canvas already did. That is a second resample
+ * of every pixel, and a sixteen pixel font is exactly the thing that suffers: letters
+ * come out chipped and some strokes vanish. Nothing about it shows up at 100%, which is
+ * why it reads as a font problem rather than as scaling.
+ *
+ * Resolved by name rather than linked, so the same binary still loads on a Windows old
+ * enough not to have the newer entry point. */
+static void win_dpi_aware(void) {
+    /* PROCESS_PER_MONITOR_DPI_AWARE, written out because the enum name is only visible
+     * from a newer SDK than this file targets, and the value is what matters. */
+    typedef HRESULT (WINAPI *set_awareness_t)(int);
+    HMODULE shcore = LoadLibraryW(L"shcore.dll");
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    BOOL (WINAPI *set_aware)(void);
+
+    if (shcore != NULL) {
+        /* Through void (*)(void): GetProcAddress returns FARPROC, and casting that
+         * straight to a specific signature trips -Wcast-function-type. This is the
+         * spelling GCC documents for it. */
+        set_awareness_t set_awareness =
+            (set_awareness_t)(void (*)(void))GetProcAddress(shcore,
+                                                           "SetProcessDpiAwareness");
+
+        if (set_awareness != NULL && SUCCEEDED(set_awareness(2))) {
+            FreeLibrary(shcore);
+            return;
+        }
+        FreeLibrary(shcore);
+    }
+    /* Windows Vista and later. Enough on its own: it stops the window being resampled
+     * by the compositor, which is the whole of the problem here. */
+    if (user32 != NULL) {
+        set_aware = (BOOL(WINAPI *)(void))(void (*)(void))GetProcAddress(
+            user32, "SetProcessDPIAware");
+        if (set_aware != NULL && set_aware()) {
+            return;
+        }
+    }
+}
+
 static LRESULT CALLBACK win_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     WinState *st = (WinState *)(LONG_PTR)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
 
@@ -153,6 +196,13 @@ static LRESULT CALLBACK win_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT:
         win_push(st);
         return 0;
+
+    /* Without this the click that lands on an inactive window is spent waking it, and
+     * the button under the pointer does not fire. The player has to click twice, and
+     * only while the window happens to be inactive, which makes it look intermittent
+     * rather than wrong. */
+    case WM_MOUSEACTIVATE:
+        return MA_ACTIVATE;
 
     /* Painting the background ourselves is what stops the window flashing white
      * between frames, and there is nothing else that belongs there. */
@@ -221,6 +271,8 @@ static int win_open(void *self, const char *title, int32_t w, int32_t h) {
      * widened by hand. */
     wc.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
     wc.lpszClassName = k_class;
+    win_dpi_aware();
+
     if (RegisterClassExW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         return 0;
     }
