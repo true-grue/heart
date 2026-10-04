@@ -111,7 +111,7 @@ $(CONFIG):
 
 DEP := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(AN_OBJ:.o=.d)
 
-.PHONY: all test parity analyze demo demo-asan win clean $(GAMES)
+.PHONY: all test parity complexity analyze demo demo-asan win clean $(GAMES)
 
 all: $(LIB)
 
@@ -172,6 +172,12 @@ test: $(TEST_BIN)
 # is worse than one that is not run by default.
 parity:
 	python3 tools/py/check_parity.py
+
+# Cyclomatic complexity over src only, cap 15. Not part of test: it needs lizard, and
+# that is a development tool rather than a build dependency.
+complexity:
+	@command -v lizard >/dev/null 2>&1 || { echo "пропуск: нет lizard (pip install lizard)"; exit 1; }
+	lizard -C 15 -w src
 
 analyze: $(AN_OBJ)
 
