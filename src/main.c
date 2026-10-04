@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 199309L
 
+#include "ui.h"
 #include "arena.h"
 #include "utf8.h"
 #include "game.h"
@@ -65,12 +66,10 @@
 /* The most words one command can have, and so the most slots the palette needs.
  * Equals RULE_MAX_WORDS: a command the screen cannot show is a command the player
  * cannot type. */
-#define CMD_SLOTS RULE_MAX_WORDS
 
 #define TYPE_CPS 45                /* characters a second while the answer types */
 #define PARA_MAX 4096
 #define MAX_CHOICES 16
-#define MAX_HITS 48
 #define ROWS_MAX 32
 #define LABEL_MAX 48
 
@@ -104,7 +103,6 @@ typedef struct Span {
     uint32_t len;
 } Span;
 
-#define FRAG_MAX 64
 
 
 typedef struct GameDef {
@@ -118,58 +116,6 @@ static const GameDef k_games[] = {
     { "field", "assets/script/field.script", "МЕЧ ИЗ ЗАМКА" },
     { "heart", "assets/script/heart.script", "Серое Сердце" }
 };
-
-typedef struct Hit {
-    IoRect r;
-    int kind;
-    Sym sym;
-} Hit;
-
-/* The command under construction: the slots already chosen, left to right. The
- * format has a verb and an object today; CMD_SLOTS leaves the sentence able to
- * grow without the band learning a new shape. */
-typedef struct Command {
-    Sym slot[CMD_SLOTS];
-    int filled;
-} Command;
-
-typedef struct Ui {
-    IoCtx *ctx;
-    const TextFont *font;
-    const Game *game;
-    const Script *script;
-    const char *game_title;
-
-    Command cmd;
-    Command last;        /* the command just run, held on screen while it answers */
-    int have_last;
-
-    Hit hits[MAX_HITS];
-    size_t hit_n;
-
-    size_t last_log;      /* to notice a new answer and restart the typing */
-    double typed;         /* characters revealed so far */
-    /* How far the answer band has scrolled, in pixels, and where it is going. Rows
-     * would jump a whole line every time the text grew past the bottom, and that jump
-     * is the blink. */
-    double scroll;
-    double scroll_want;
-    /* The description scrolls its tail too, for the same reason the answer does: a room
-     * can say more than fits, and cutting it off is worse than moving it. */
-    double dscroll;
-    double dscroll_want;
-    int animate;          /* off for the walkthrough: the frames must be comparable */
-    int overfull;         /* frames whose bands could not hold their own text */
-    size_t last_room;      /* to notice a new room and start its scroll over */
-    /* Fragments of this room already on screen, and those that arrived with the last
-     * command. Keyed on the fragment's line in the script, the only stable name one
-     * has. */
-    int frag_line[FRAG_MAX];
-    size_t frag_line_n;
-    int frag_hot[FRAG_MAX];
-    size_t frag_hot_n;
-    int done;             /* the answer is fully revealed */
-} Ui;
 
 static double now_ms(void) {
     struct timespec t;
