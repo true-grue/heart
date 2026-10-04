@@ -205,9 +205,15 @@ static char *slurp(const char *path, size_t *len) {
 
 /* ------------------------------------------------------------- log read -- */
 
-/* Index of the last block that opens with the given kind of heading. A room block
- * carries its title, a command block the verb and object. */
-static size_t last_block(const Game *g, int want_room) {
+/* Index into the log of the last block with the given kind of heading: a room block
+ * carries its title, a command block the verb and object.
+ *
+ * Named for what it returns. It used to be called last_block, which reads like "the last
+ * room", and it was compared against g->room, which is a room symbol. Those are different
+ * numbers, the comparison was therefore true almost every frame, and the result was a
+ * flash of highlight on entering a room that lasted until the next redraw. The name is
+ * the only thing that stops it being made again. */
+static size_t last_log_index(const Game *g, int want_room) {
     size_t i;
 
     for (i = g->log_count; i > 0; i--) {
@@ -1029,8 +1035,8 @@ static void draw(Ui *ui) {
     char para[PARA_MAX];
     char dpara[PARA_MAX];
     char dpara2[PARA_MAX];
-    size_t room = last_block(g, 1);
-    size_t cmd = last_block(g, 0);
+    size_t room = last_log_index(g, 1);
+    size_t cmd = last_log_index(g, 0);
     size_t answer_n;
     size_t desc_n;
     size_t i;
@@ -1042,9 +1048,9 @@ static void draw(Ui *ui) {
      * that lands below it leaves the frame that enters a room drawn in the previous
      * room's colours. The room then looks briefly wrong and corrects itself on the next
      * redraw, which reads as a flicker on a mouse move. */
-    /* Compared as the room symbol, not as the log index last_block returns. The two
-     * are different numbers, and mixing them makes "the room changed" true almost every
-     * frame, which both repaints the old colours and stops anything being marked. */
+    /* g->room is a room symbol and last_log_index returns a log index. They are never
+     * compared to each other; see the note on last_log_index for what happened last time
+     * they were. */
     if ((size_t)g->room != ui->last_room) {
         ui->last_room = (size_t)g->room;
         ui->dscroll = 0.0;
@@ -2126,7 +2132,7 @@ int main(int argc, char **argv) {
                  * is no keyboard to press, and waiting out a long answer is the one
                  * thing a finger should not have to do. */
                 char probe[PARA_MAX];
-                size_t here = last_block(&game, 0);
+                size_t here = last_log_index(&game, 0);
                 size_t n = (here != (size_t)-1)
                          ? block_text(&game, here + 1, block_end(&game, here), probe,
                                       sizeof probe)
@@ -2205,7 +2211,7 @@ int main(int argc, char **argv) {
             ui.scroll_want = 0.0;
             ui.done = 0;
         }
-        cmd = last_block(&game, 0);
+        cmd = last_log_index(&game, 0);
         if (cmd != (size_t)-1) {
             char probe[PARA_MAX];
             answer = block_text(&game, cmd + 1, block_end(&game, cmd), probe,
