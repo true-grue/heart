@@ -681,6 +681,7 @@ static void note_room_fragments(Ui *ui, const Game *g);
 static void mark_new_fragments(Ui *ui, const Game *g) {
     char buf[PARA_MAX];
     FragSpan sp[FRAG_MAX];
+    size_t n = 0;
     size_t i;
     size_t j;
 
@@ -699,13 +700,14 @@ static void mark_new_fragments(Ui *ui, const Game *g) {
         return;
     }
     ui->frag_hot_n = 0;
-    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX) == 0) {
+    /* The count comes back from the call. Looking for the end of the array by
+     * inspecting entries nobody wrote is reading uninitialised stack, and what is
+     * there differs between toolchains: the same source then marks a different number
+     * of fragments on Linux and on Windows, which is exactly what it did. */
+    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX, &n) == 0) {
         return;
     }
-    for (i = 0; i < FRAG_MAX; i++) {
-        if (sp[i].len == 0 && sp[i].off == 0 && i > 0) {
-            break;
-        }
+    for (i = 0; i < n; i++) {
         for (j = 0; j < ui->frag_line_n; j++) {
             if (ui->frag_line[j] == sp[i].line) {
                 break;
@@ -728,14 +730,15 @@ static void mark_new_fragments(Ui *ui, const Game *g) {
 static void note_room_fragments(Ui *ui, const Game *g) {
     char buf[PARA_MAX];
     FragSpan sp[FRAG_MAX];
+    size_t n = 0;
     size_t i;
 
     ui->frag_line_n = 0;
     ui->frag_hot_n = 0;
-    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX) == 0) {
+    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX, &n) == 0) {
         return;
     }
-    for (i = 0; i < FRAG_MAX && sp[i].len > 0; i++) {
+    for (i = 0; i < n; i++) {
         if (ui->frag_line_n < FRAG_MAX) {
             ui->frag_line[ui->frag_line_n++] = sp[i].line;
         }
@@ -1109,14 +1112,16 @@ static void draw(Ui *ui) {
         Span hl[FRAG_MAX];
         FragSpan sp[FRAG_MAX];
         size_t hl_n = 0;
+        size_t nsp = 0;
         size_t si;
         size_t k;
 
         /* Which fragments arrived with the last command, as offsets into the text this
          * frame draws. Rebuilt per frame, because the offsets move whenever the
          * description is assembled differently. */
-        if (game_room_text_spans(g, dpara2, sizeof dpara2, sp, FRAG_MAX) == desc_n) {
-            for (si = 0; si < FRAG_MAX && sp[si].len > 0; si++) {
+        if (game_room_text_spans(g, dpara2, sizeof dpara2, sp, FRAG_MAX, &nsp) ==
+            desc_n) {
+            for (si = 0; si < nsp; si++) {
                 for (k = 0; k < ui->frag_hot_n; k++) {
                     if (ui->frag_hot[k] == sp[si].line) {
                         hl[hl_n].off = sp[si].off;

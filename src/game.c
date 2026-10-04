@@ -133,12 +133,19 @@ void game_head(Game *g, const char *title, uint32_t title_len, const Sym *words,
  * appear because of what the player just did. To point that out, the caller has to
  * know where the fragment begins and ends; a flat string throws that away. */
 size_t game_room_text_spans(const Game *g, char *out, size_t cap, FragSpan *spans,
-                            size_t span_cap) {
+                            size_t span_cap, size_t *span_n) {
     const ScriptRoom *r = script_room_by_id(g->script, g->room);
     size_t n = 0;
     size_t sn = 0;
     uint32_t i;
 
+    /* The count is reported, never left for the caller to guess. Guessing means looking
+     * for a zero entry past the end of what was written, which reads whatever was on the
+     * stack: on one toolchain that was zeroes, on another it was not, and the same
+     * source then behaves differently on two platforms. */
+    if (span_n != NULL) {
+        *span_n = 0;
+    }
     if (out == NULL || cap == 0) {
         return 0;
     }
@@ -175,11 +182,14 @@ size_t game_room_text_spans(const Game *g, char *out, size_t cap, FragSpan *span
         }
     }
     out[n] = '\0';
+    if (span_n != NULL) {
+        *span_n = sn;
+    }
     return n;
 }
 
 size_t game_room_text(const Game *g, char *out, size_t cap) {
-    return game_room_text_spans(g, out, cap, NULL, 0);
+    return game_room_text_spans(g, out, cap, NULL, 0, NULL);
 }
 
 void game_enter(Game *g, Sym room) {

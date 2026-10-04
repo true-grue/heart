@@ -100,8 +100,11 @@ typedef struct FragSpan {
 } FragSpan;
 
 size_t game_room_text(const Game *g, char *out, size_t cap);
+/* span_n receives how many spans were written. It is never optional in practice:
+ * without it the caller has to find the end of the array by inspecting entries that
+ * were never written, which is reading uninitialised memory. */
 size_t game_room_text_spans(const Game *g, char *out, size_t cap, FragSpan *spans,
-                            size_t span_cap);
+                            size_t span_cap, size_t *span_n);
 
 void game_enter(Game *g, Sym room);
 
