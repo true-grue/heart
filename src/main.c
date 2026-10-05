@@ -1196,7 +1196,11 @@ typedef struct Node {
     Sym words[RULE_MAX_WORDS];
 } Node;
 
-static Node g_nodes[WALK_MAX_SEEN];
+/* On the heap, not in the image. It was a static array of 8192 entries, and every entry
+ * carries a whole game state, so the program carried fifty five megabytes of queue in
+ * its bss for the entire run — including all the runs that never walk anything, which is
+ * all of them except one. */
+static Node *g_nodes;
 static size_t g_nodes_n;
 static size_t g_head;
 static int g_win;
@@ -1633,6 +1637,11 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
     int step;
     int steps = 0;
 
+    g_nodes = malloc(WALK_MAX_SEEN * sizeof *g_nodes);
+    if (g_nodes == NULL) {
+        fprintf(stderr, "не хватило памяти на очередь обхода\n");
+        return 1;
+    }
     g_nodes_n = 0;
     g_head = 0;
     g_win = -1;
@@ -1661,6 +1670,8 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
             fprintf(stderr, "этим скриптом нельзя выиграть: перебраны все %zu состояний\n",
                     g_nodes_n);
         }
+        free(g_nodes);
+        g_nodes = NULL;
         return 3;
     }
 
@@ -1674,8 +1685,15 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
         }
         path[0] = '\0';
         {
-            int idx[WALK_MAX_SEEN];
+            int *idx = malloc(WALK_MAX_SEEN * sizeof *idx);
             int m = 0;
+
+            if (idx == NULL) {
+                fprintf(stderr, "не хватило памяти на путь\n");
+                free(g_nodes);
+                g_nodes = NULL;
+                return 1;
+            }
 
             for (n = g_win; n > 0; n = g_nodes[n].parent) {
                 idx[m++] = n;
@@ -1694,6 +1712,7 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
                              (k ? " " : ""), (int)wl, w);
                 }
             }
+            free(idx);
         }
         printf("прохождение (%d шагов):\n  %s\n", steps, path);
         step = steps;
@@ -1735,6 +1754,8 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
             ui_mark_new_fragments(ui, g);
         }
     }
+    free(g_nodes);
+    g_nodes = NULL;
     printf("кадров записано: %d\n", steps + 2);
     if (ui->overfull > 0) {
         printf("кадров не влезло в 480: %d\n", ui->overfull);
@@ -1958,7 +1979,11 @@ int main(int argc, char **argv) {
     }
     if (walking) {
         int rc = run_walkthrough(&ui, &game, &script, argv[3]);
+
         io_backend_close(&ctx);
+        /* The walkthrough returns from here, so the script text was never reaching the
+         * free at the end of main. Four and a half kilobytes, which valgrind pointed at. */
+        free(script_text);
         return rc;
     }
 
