@@ -59,9 +59,13 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h), {
     c.style.width = css_w + "px";
     c.style.height = css_h + "px";
     c.style.imageRendering = "pixelated";
+    /* Centred here rather than by the page's layout: a whole-number scale leaves bars of
+     * up to a whole row and column, and they have to end up the same on both sides. */
+    c.style.position = "absolute";
+    c.style.left = Math.max(0, Math.floor((window.innerWidth - css_w) / 2)) + "px";
+    c.style.top = Math.max(0, Math.floor((window.innerHeight - css_h) / 2)) + "px";
     c.style.touchAction = "none";
     c.style.display = "block";
-    c.style.margin = "0 auto";
     var s = document.getElementById("quest_web_css");
     if (!s) {
         s = document.createElement("style");
@@ -115,11 +119,13 @@ EM_JS(void, web_blit, (int w, int h, void *ptr), {
  * backing store, the box it is shown in and the view cannot end up as three different
  * numbers.
  *
- * Release: the backing store is the virtual canvas and the box is the largest rectangle
- * of the same shape that fits the window. The browser does the enlarging, so nothing in
- * the heap depends on how big the screen is and a large window cannot ask for memory the
- * page does not have. The bars are the page background, which is why the fit keeps the
- * shape instead of stretching to the window.
+ * Release: the backing store is the virtual canvas and the box is that canvas times a
+ * whole number. The browser does the enlarging, so nothing in the heap depends on how big
+ * the screen is and a large window cannot ask for memory the page does not have. The
+ * factor is a whole number because a fractional one would make the browser interpolate
+ * and put unequal pixels side by side, which is the one thing this game never does to a
+ * pixel. The bars are the page background, and they are centred rather than pushed to the
+ * top, because a whole-number factor leaves up to a whole row of them.
  *
  * Test key: both are the requested resolution, so the browser does nothing at all. */
 static void web_resize(void) {
@@ -135,16 +141,17 @@ static void web_resize(void) {
         st->w = st->fixed_w;
         st->h = st->fixed_h;
     } else {
-        double va = (double)st->vw / (double)st->vh;
-        double wa = (double)st->win_w / (double)st->win_h;
+        int32_t k = st->win_w / st->vw;
+        int32_t kh = st->win_h / st->vh;
 
-        if (wa > va) {
-            css_h = st->win_h;
-            css_w = (int32_t)((double)st->win_h * va + 0.5);
-        } else {
-            css_w = st->win_w;
-            css_h = (int32_t)((double)st->win_w / va + 0.5);
+        if (kh < k) {
+            k = kh;
         }
+        if (k < 1) {
+            k = 1;   /* smaller than the canvas: shown at one to one and cropped */
+        }
+        css_w = st->vw * k;
+        css_h = st->vh * k;
         st->w = st->vw;
         st->h = st->vh;
     }
