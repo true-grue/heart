@@ -192,14 +192,18 @@ static void try_words(Game *g, const GameState *base, int parent, const Sym *pre
 }
 
 
-static void dump_ppm(const char *path, const uint32_t *px, int w, int h) {
+/* Returns 0 when the frame did not reach the disk, and the caller counts: a counter
+ * that reports frames it never wrote is a confident falsehood. This one did exactly
+ * that — the directory did not exist, fopen failed, the function returned quietly and
+ * the run still announced sixteen frames written. */
+static int dump_ppm(const char *path, const uint32_t *px, int w, int h) {
     FILE *f = fopen(path, "wb");
     static unsigned char row[4096 * 3];
     int x, y;
     int maxw = (w * 3 < (int)sizeof row) ? w : (int)(sizeof row / 3);
 
     if (f == NULL) {
-        return;
+        return 0;
     }
     fprintf(f, "P6\n%d %d\n255\n", w, h);
     for (y = 0; y < h; y++) {
@@ -211,7 +215,8 @@ static void dump_ppm(const char *path, const uint32_t *px, int w, int h) {
         }
         fwrite(row, 1, (size_t)(maxw * 3), f);
     }
-    fclose(f);
+    /* Flushing is where a full disk shows up, so it is part of the answer. */
+    return fclose(f) == 0;
 }
 
 /* ---------------------------------------------------------- layout audit -- */
@@ -507,6 +512,7 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
     GameState start;
     int step;
     int steps = 0;
+    int written = 0;
 
     g_nodes = malloc(WALK_MAX_SEEN * sizeof *g_nodes);
     g_slot = malloc(WALK_SLOT_N * sizeof *g_slot);
@@ -616,7 +622,11 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
         ui->cmd.filled = 0;
         ui_draw(ui);
         snprintf(name, sizeof name, "%s/frame%02d.ppm", dir, step);
-        dump_ppm(name, ui->ctx->pixels, ui->ctx->w, ui->ctx->h);
+        if (dump_ppm(name, ui->ctx->pixels, ui->ctx->w, ui->ctx->h)) {
+            written++;
+        } else {
+            fprintf(stderr, "не удалось записать кадр: %s\n", name);
+        }
         if (step > steps) {
             break;
         }
@@ -633,7 +643,12 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
         }
     }
     nodes_free();
-    printf("кадров записано: %d\n", steps + 2);
+    printf("кадров записано: %d\n", written);
+    if (written != steps + 2) {
+        fprintf(stderr, "записано %d кадров из %d: каталог %s недоступен на запись\n",
+                written, steps + 2, dir);
+        return 4;
+    }
     if (ui->overfull > 0) {
         printf("кадров не влезло в 480: %d\n", ui->overfull);
     } else {
