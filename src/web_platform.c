@@ -27,6 +27,7 @@ typedef struct WebState {
     int32_t fixed_w, fixed_h;  /* test key asked for a resolution: browser scales nothing */
     int32_t win_w, win_h;      /* window in CSS pixels, for the letterbox */
     int32_t css_w, css_h;      /* box the canvas is shown in, to notice a change */
+    int fs;                    /* canvas is the fullscreen element: placed, not offset */
     int settle;                /* frames left to keep remeasuring the window */
     double dpr;        /* backing pixels per CSS pixel */
     uint32_t *stage;   /* backing sized, 0xRRGGBB, filled by io_scale_canvas */
@@ -125,6 +126,14 @@ EM_JS(int, web_key_size, (int which), {
 EM_JS(int, web_window_w, (void), { return document.documentElement.clientWidth | 0; })
 EM_JS(int, web_window_h, (void), { return document.documentElement.clientHeight | 0; })
 
+/* Whether the canvas is the fullscreen element. Entering and leaving it changes how the
+ * canvas is placed and not how big it is, so the size alone does not tell the sizing code
+ * that anything happened. */
+EM_JS(int, web_canvas_is_fullscreen, (void), {
+  var c = document.getElementById("canvas");
+  return (c && document.fullscreenElement === c) ? 1 : 0;
+})
+
 /* Canvas ImageData is RGBA, a 0xRRGGBB word in little endian memory is B,G,R,0, and
  * alpha is opaque everywhere. Byte order is the platform's business: the framebuffer is
  * only read here, never written. */
@@ -161,6 +170,7 @@ static void web_resize(void) {
     WebState *st = &g_web;
     int32_t css_w, css_h;
     int crisp = 1;
+    int fs;
 
     if (st->vw <= 0 || st->vh <= 0) {
         return;
@@ -203,11 +213,17 @@ static void web_resize(void) {
         st->w = st->vw;
         st->h = st->vh;
     }
-    if (css_w == st->css_w && css_h == st->css_h) {
+    /* The mode is part of this: fullscreen moves the canvas by giving up the offsets,
+     * and leaving fullscreen has to put them back. Comparing the size alone left the
+     * canvas at static position 0,0 with the page restored around it, and the button
+     * then measured its bars against a shape that was not there. */
+    fs = web_canvas_is_fullscreen();
+    if (css_w == st->css_w && css_h == st->css_h && fs == st->fs) {
         return;   /* nothing moved, and touching the DOM every frame would be waste */
     }
     st->css_w = css_w;
     st->css_h = css_h;
+    st->fs = fs;
     st->dpr = (double)st->w / (double)css_w;
     web_canvas_open(st->w, st->h, css_w, css_h, crisp);
 }

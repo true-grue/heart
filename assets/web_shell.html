@@ -100,7 +100,14 @@ full.onclick = function () {
   else if (page.webkitRequestFullscreen) { page.webkitRequestFullscreen(); }
 };
 window.addEventListener("resize", place);
-document.addEventListener("fullscreenchange", place);
+/* Entering and leaving fullscreen change where the canvas sits, and the backend only
+ * rewrites the canvas when it thinks something moved. The event is repeated as a resize
+ * so that path runs: without it the canvas kept the offsets it had for the other mode,
+ * and the bars the button measures itself against were the wrong shape. */
+document.addEventListener("fullscreenchange", function () {
+  place();
+  window.dispatchEvent(new Event("resize"));
+});
 /* The canvas is sized by the backend on its first frame, so its bar does not exist yet
  * when load fires. */
 setInterval(place, 500);
