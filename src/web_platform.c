@@ -69,7 +69,9 @@ EM_JS(int, web_canvas_open, (int w, int h, double dpr), {
  * only read here, never written. */
 EM_JS(void, web_blit, (int w, int h, void *ptr), {
     var src = ptr;
-    var u8 = Module.HEAPU8;
+    /* The buffer is in scope here as HEAPU8; Module.HEAPU8 is a compatibility
+     * property that this build does not set, and reading it yields undefined. */
+    var u8 = HEAPU8;
     var n = w * h;
     var d = new Uint8ClampedArray(n * 4);
     for (var i = 0, j = 0; i < n; i++, src += 4, j += 4) {
