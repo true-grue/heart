@@ -161,4 +161,20 @@ void ui_mark_new_fragments(Ui *ui, const Game *g);
  * inside the drawing there is no way to. */
 void items_fit(const TextFont *f, char label[][LABEL_MAX], uint32_t *len, size_t n);
 
+/* The drawing primitives. They move as a group because each one calls at least one
+ * other, so moving one alone leaves a chain of forward declarations behind. */
+void ui_add_hit(Ui *ui, IoRect r, int kind, Sym sym);
+void ui_text_at(IoCtx *c, const TextFont *f, int32_t x, int32_t top, const char *t,
+                uint32_t len, IoColor ink);
+int32_t ui_draw_button(IoCtx *c, Ui *ui, const TextFont *f, int32_t right, int32_t y,
+                       int32_t h, const char *label, size_t len, IoColor bg, int kind);
+int32_t ui_draw_tile(IoCtx *c, const TextFont *f, int32_t x, int32_t y, const char *label,
+                     uint32_t len, int filled);
+int ui_chip_wraps(int32_t x, int32_t w);
+int32_t ui_chip_rows_needed(const TextFont *f, Ui *ui, const Sym *syms, size_t n,
+                            const char *trailing);
+int32_t ui_draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
+                          const Sym *syms, size_t n, int kind, const char *trailing);
+size_t ui_gather_pick(Ui *ui, Sym *choices, size_t cap);
+
 #endif
