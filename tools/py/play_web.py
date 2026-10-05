@@ -94,7 +94,7 @@ def main(argv=None):
     proc = subprocess.run(
         ["chromium", "--headless", "--no-sandbox", "--disable-gpu",
          "--disable-dev-shm-usage", "--user-data-dir=" + tempfile.mkdtemp(prefix="chromep-"),
-         "--window-size=1500,1000", "--virtual-time-budget=3000000",
+         "--window-size=1500,1000", "--virtual-time-budget=" + os.environ.get("PLAY_BUDGET", "120000"),
          "--dump-dom", "http://127.0.0.1:8131/driver.html"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180 * 10)
     dom = proc.stdout.decode("utf-8", "replace")
@@ -212,6 +212,7 @@ async function click(x,y){
 }
 async function play(plan){
   var f=document.getElementById("f");
+  var t0=Date.now(), worst=0, worstAt=-1;
   f.src="index.html";
   await sleep(2500);
   for(var s=0;s<plan.length;s++){
@@ -228,10 +229,16 @@ async function play(plan){
            ответ — так игрок и делает. Заодно проверяется, что приём работает и в
            браузере, а не только в расчётах. Место выбрано в описании, где нет ни
            чипов, ни кнопок. */
+        var c0=Date.now();
         await sleep(200);
         await click(320,200);
         await sleep(200);
-        await waitChips(1);
+        if(s < plan.length-1) await waitChips(1);
+        /* Последняя команда — концовка: чипов не будет уже никогда, и ожидание их
+           выбирало весь лимит polling, сорок секунд на пустоту. */
+        else await sleep(1000);
+        var spent=Date.now()-c0;
+        if(spent>worst){worst=spent; worstAt=s;}
       } else {
         await sleep(400);
       }
@@ -241,6 +248,8 @@ async function play(plan){
   for(var i=0;i<200 && chipCount()>0; i++) await sleep(500);
   var fail=f.contentDocument.getElementById("fail");
   if(fail && !fail.hidden) return "страница сообщила об ошибке: "+fail.textContent;
+  say("    виртуальных секунд: "+Math.round((Date.now()-t0)/1000)+
+      ", худшая команда №"+worstAt+" ("+worst+" мс)");
   return null;
 }
 var log=document.getElementById("log"), f=document.getElementById("f"), out=[];
