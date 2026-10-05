@@ -74,6 +74,16 @@ typedef struct Span {
     uint32_t len;
 } Span;
 
+#define CTRL_H 30
+#define NAME_H 32
+#define ITEMS_H 26                   /* the strip of carried things */
+#define CMD_PAD 8
+#define DESC_MIN_H 56                /* below this the description stops being read */
+#define RESP_MIN_H 60
+#define TILE_H 36                     /* one slot in the command line */
+#define PARA_MAX 4096
+#define MAX_CHOICES 16
+
 #define CMD_SLOTS RULE_MAX_WORDS
 #define MAX_HITS 48
 #define FRAG_MAX 64

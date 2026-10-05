@@ -36,20 +36,11 @@
  * is left between them, so no band is taller than its content and nothing is reserved
  * that goes unused. The answer is the one that gives way when a frame holds more than
  * the canvas has room for: it already scrolls its tail, so shrinking it costs least. */
-#define CTRL_H 30
-#define NAME_H 32
-#define ITEMS_H 26                   /* the strip of carried things */
-#define CMD_PAD 8
-#define DESC_MIN_H 56                /* below this the description stops being read */
-#define RESP_MIN_H 60
-#define TILE_H 36                     /* one slot in the command line */
 /* The most words one command can have, and so the most slots the palette needs.
  * Equals RULE_MAX_WORDS: a command the screen cannot show is a command the player
  * cannot type. */
 
 #define TYPE_CPS 45                /* characters a second while the answer types */
-#define PARA_MAX 4096
-#define MAX_CHOICES 16
 
 
 
