@@ -633,7 +633,16 @@ int main(int argc, char **argv) {
             dirty = 1;
         }
         if (!ui.done) {
-            ui.typed += TYPE_CPS * dt / 1000.0;
+            /* The answer types at a fixed rate, and a late frame must not make up for it
+             * by printing the rest. dt is capped for the rest of the loop at 250 ms, which
+             * is still eleven characters a frame at 45 a second: after any pause, a couple
+             * of those frames put a whole paragraph on the screen at once and the text
+             * stops looking typed. The pacing is the point of the answer band, so the step
+             * is capped tighter than the frame time is — one frame cannot print more than
+             * a word and a half, whatever the machine was doing. */
+            double step = (dt > 40.0) ? 40.0 : dt;
+
+            ui.typed += TYPE_CPS * step / 1000.0;
             if (ui.typed >= (double)answer) {
                 ui.typed = (double)answer;
                 ui.done = 1;
