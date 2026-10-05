@@ -50,23 +50,20 @@ window.addEventListener("unhandledrejection", function (e) {
   report(r && r.message ? r.message : String(r), "", 0, 0);
 });
 
-/* Fullscreen, in the widest bar around the canvas: the four strips the canvas leaves
- * free are measured, the roomiest one that can hold the button takes it, and the button
- * goes to its middle. Recomputed on every call rather than parked at an offset, because
- * an offset from the bottom is only right for the layout it was written against and the
- * canvas is not always there — rotated, in fullscreen, or scaled down to fit.
+/* Fullscreen, always below the field and never beside it or above it: beside the canvas
+ * the button landed on the control strip with Выход, and above it on the title band.
  *
- * When no strip has room the button still has to exist: in fullscreen it is the way out,
- * so it goes to the corner of the largest strip anyway and is clamped inside the window.
- * Off screen is the one outcome that leaves the player stuck.
+ * When the field reaches the bottom of the window there is no bar left to sit in. The
+ * button then goes flush to the bottom edge rather than over the middle of the game, and it
+ * is never hidden: in fullscreen it is the way out, and a control that disappears is a
+ * control that strands the player.
  *
  * iPhone Safari has no element fullscreen at all, so the request is guarded: a phone that
  * cannot do it must not get an error for asking.
  *
  * The document goes fullscreen rather than the canvas, and that is the whole reason the
- * controls stay reachable: a fullscreen canvas is the only thing on screen, so the
- * button that got you there disappears with it, and the top strip of the game ends up
- * offset by margins meant for a page that is no longer there. */
+ * controls stay reachable: a fullscreen canvas is the only thing on screen, so the button
+ * that got you there disappears with it. */
 var full = document.getElementById("full");
 function place() {
   var c = document.getElementById("canvas");
@@ -75,28 +72,28 @@ function place() {
   var W = page.clientWidth, H = page.clientHeight;
   var r = c.getBoundingClientRect();
   var bw = full.offsetWidth, bh = full.offsetHeight;
-  var L = Math.round(r.left), T = Math.round(r.top);
-  var R = Math.round(r.right), B = Math.round(r.bottom);
-  var bars = [
-    { x: 0, y: 0, w: W, h: T },
-    { x: 0, y: B, w: W, h: H - B },
-    { x: 0, y: 0, w: L, h: H },
-    { x: R, y: 0, w: W - R, h: H }
-  ];
-  var best = null, i, b;
-  for (i = 0; i < bars.length; i++) {
-    b = bars[i];
-    if (b.w < bw + 8 || b.h < bh + 8) { continue; }
-    if (best === null || b.w * b.h > best.w * best.h) { best = b; }
+  var bottom = Math.round(r.bottom), right = Math.round(W - r.right);
+  var bar = H - bottom;
+  var side;
+
+  /* Снизу, а если поля снизу нет — справа. Сверху нельзя: там полоса названия, слева
+     неудобно, и обе мимо. Никогда не исчезает: в полноэкранном режиме это выход, а
+     исчезнувшая кнопка оставляет игрока в нём. */
+  if (bar >= bh + 8) {
+    side = "below";
+    full.style.left = Math.max(0, Math.round((W - bw) / 2)) + "px";
+    full.style.top = Math.round(bottom + (bar - bh) / 2) + "px";
+  } else if (right >= bw + 8) {
+    side = "right";
+    full.style.left = Math.round(W - right + (right - bw) / 2) + "px";
+    full.style.top = Math.max(0, Math.round(r.top + (Math.round(r.height) - bh) / 2)) + "px";
+  } else {
+    side = "flush";
+    full.style.left = Math.max(0, Math.round((W - bw) / 2)) + "px";
+    full.style.top = Math.max(0, H - bh - 4) + "px";
   }
-  if (best === null) {
-    for (i = 0; i < bars.length; i++) {
-      if (bars[i].w * bars[i].h > (best === null ? -1 : best.w * best.h)) { best = bars[i]; }
-    }
-  }
+  full.dataset.side = side;
   full.hidden = false;
-  full.style.left = Math.max(0, Math.min(W - bw, Math.round(best.x + (best.w - bw) / 2))) + "px";
-  full.style.top = Math.max(0, Math.min(H - bh, Math.round(best.y + (best.h - bh) / 2))) + "px";
 }
 full.onclick = function () {
   var page = document.documentElement;
