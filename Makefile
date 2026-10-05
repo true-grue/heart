@@ -51,7 +51,8 @@ HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null >/dev/null 2>&1 
 ifneq (,$(findstring emcc,$(CC)))
 LIB_SRC   += src/web_platform.c
 CFLAGS_X  := -DIO_WEB -sASYNCIFY
-LDFLAGS_X := -sASYNCIFY --preload-file assets@/assets
+WEB_SHELL := src/web_shell.html
+LDFLAGS_X := -sASYNCIFY --preload-file assets@/assets --shell-file $(WEB_SHELL)
 EXE       := .html
 else ifneq (,$(findstring mingw,$(CC)))
 LIB_SRC   += src/win_platform.c
@@ -81,6 +82,10 @@ HDRS := src/arena.h \
         src/io.h \
         src/dsl.h \
         src/font.h
+
+# The web shell is built into the page, so editing it has to rebuild the page: a stale
+# index with a new canvas script is the same failure as a stale header with a new struct.
+HDRS   += $(WEB_SHELL)
 
 # One target per game, so `make heart` builds the game with that script baked in and it
 # starts with no argument. The list is named rather than globbed: a script in the assets

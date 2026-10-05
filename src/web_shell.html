@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Quest</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #canvas { display: block; touch-action: none; margin: 0 auto; }
+</style>
+<body>
+<pre id="fail" hidden style="color:#f66;font:14px/1.4 monospace;padding:10px;white-space:pre-wrap"></pre>
+<canvas id="canvas"></canvas>
+<script>
+/* The stock emscripten shell answers a failure with a line of grey text beside its own
+ * logo and leaves the canvas black. A black screen is the worst possible report — it
+ * reads as "the game did not start" and has to be diagnosed from a console nobody
+ * opened — so a failure is written where a player already is. */
+function report(msg, src, line, col) {
+  var p = document.getElementById("fail");
+  p.hidden = false;
+  p.textContent = "failed: " + msg + "\n  " + src + ":" + line + ":" + col;
+  document.title = "failed";
+  return true;
+}
+window.onerror = function (msg, src, line, col) { return report(msg, src, line, col); };
+window.addEventListener("unhandledrejection", function (e) {
+  var r = e.reason;
+  report(r && r.message ? r.message : String(r), "", 0, 0);
+});
+</script>
+{{{ SCRIPT }}}
