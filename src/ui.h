@@ -177,4 +177,30 @@ int32_t ui_draw_chip_rows(IoCtx *c, Ui *ui, const TextFont *f, int32_t y,
                           const Sym *syms, size_t n, int kind, const char *trailing);
 size_t ui_gather_pick(Ui *ui, Sym *choices, size_t cap);
 
+typedef struct Layout {
+    int32_t ctrl_y, ctrl_h;
+    int32_t name_y, name_h;
+    int32_t desc_y, desc_h;
+    int32_t cmd_y, cmd_h, tile_y, pick_y;
+    int32_t resp_y, resp_h;
+    int32_t items_y, items_h;
+    int32_t chip_rows;
+    int overfull;                  /* the frame held more than 480 pixels */
+} Layout;
+
+void ui_band(IoCtx *c, int32_t y, int32_t h, IoColor bg);
+void ui_text_top(IoCtx *c, const TextFont *f, int32_t top, int32_t width, const char *t,
+                 uint32_t len, IoColor ink);
+double ui_text_tail(IoCtx *c, const TextFont *f, int32_t top, int fit, int32_t width,
+                    const char *full, uint32_t len, uint32_t vis, IoColor ink, double off,
+                    const Span *hl, size_t hl_n, IoColor hot, int32_t *end_x,
+                    int32_t *end_y);
+void ui_note_room_fragments(Ui *ui, const Game *g);
+Layout ui_compute_layout(Ui *ui, const char *desc, uint32_t desc_len, const char *ans,
+                          uint32_t ans_n);
+Layout ui_layout_commands(Ui *ui, const char *desc, uint32_t desc_len, const char *ans,
+                           uint32_t ans_n);
+int32_t ui_draw_slots(Ui *ui, IoCtx *c, const TextFont *f, int32_t x, int32_t y,
+                      const Sym *slot, size_t filled);
+
 #endif

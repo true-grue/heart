@@ -26,14 +26,14 @@
  * may have more parts than the format has today, so the slot count is an upper
  * bound rather than the shape, and nothing here assumes two.
  *
- * Every band is a fixed height in virtual pixels, so the layout is the layout on
+ * Every ui_band is a fixed height in virtual pixels, so the layout is the layout on
  * every platform and at every window size.
  */
 
 
 /* Band geometry is decided per frame, not fixed here. The system bands grow down from
  * the top, the play bands grow up from the bottom, and the description takes whatever
- * is left between them, so no band is taller than its content and nothing is reserved
+ * is left between them, so no ui_band is taller than its content and nothing is reserved
  * that goes unused. The answer is the one that gives way when a frame holds more than
  * the canvas has room for: it already scrolls its tail, so shrinking it costs least. */
 /* The most words one command can have, and so the most slots the palette needs.
@@ -158,43 +158,6 @@ static size_t block_text(const Game *g, size_t from, size_t to, char *out, size_
 /* Splits off the first visual row that fits in max_w and reports where the next
  * one starts. The break goes after the last space that fits, so words stay whole;
  * a single word wider than the row overhangs rather than being cut. */
-uint32_t ui_wrap_row(const TextFont *f, const char *t, uint32_t len,
-                         int32_t max_w, uint32_t *rest) {
-    uint32_t i = 0;
-    uint32_t cut = 0;
-    int32_t w = 0;
-    int overflow = 0;
-
-    while (i < len) {
-        uint32_t cp;
-        size_t step = utf8_decode((const uint8_t *)t + i, (size_t)(len - i), &cp);
-        int32_t cw;
-
-        if (step == 0) {
-            cp = 0xFFFDu;
-            step = 1;
-        }
-        cw = text_head_width(f, t + i, (uint32_t)(len - i));
-        if (i > 0 && w + cw > max_w) {
-            overflow = 1;
-            break;
-        }
-        w += cw;
-        i += (uint32_t)step;
-        if (cp == ' ') {
-            cut = i;
-        }
-    }
-    if (overflow && cut > 0 && cut < i) {
-        *rest = cut;
-        while (*rest < len && t[*rest] == ' ') {
-            (*rest)++;
-        }
-        return cut;
-    }
-    *rest = i;
-    return i;
-}
 
 /* Largest codepoint boundary at or before `upto`, so a partially typed answer
  * never ends inside a letter. */
@@ -207,408 +170,6 @@ static size_t utf8_floor(const char *t, size_t len, size_t upto) {
 }
 
 /* ------------------------------------------------------------ drawing -- */
-
-static void band(IoCtx *c, int32_t y, int32_t h, IoColor bg) {
-    io_fill_rect(c, (IoRect){ 0, y, GAME_W, h }, bg);
-    io_fill_rect(c, (IoRect){ 0, y + h - 1, GAME_W, 1 }, C_RULE);
-}
-
-typedef struct Rows {
-    uint32_t at[ROWS_MAX + 1];
-    size_t n;
-} Rows;
-
-/* Wraps `t` and draws it from `top` downwards. Anything past the band is clipped by
- * the clip stack rather than measured away. */
-static void text_top(IoCtx *c, const TextFont *f, int32_t top, int32_t width,
-                     const char *t, uint32_t len, IoColor ink) {
-    Rows r;
-    uint32_t left = len;
-    size_t k;
-
-    r.at[0] = 0;
-    r.n = 0;
-    while (left > 0 && r.n < ROWS_MAX) {
-        uint32_t rest = 0;
-        (void)ui_wrap_row(f, t, left, width, &rest);
-        if (rest == r.at[r.n]) {
-            break;
-        }
-        left -= rest;
-        t += rest;
-        r.n++;
-        r.at[r.n] = r.at[r.n - 1] + rest;
-    }
-    for (k = 0; k < r.n; k++) {
-        text_draw(c, f, PAD, top + f->ascent + (int32_t)k * f->line_height,
-                  t - len + r.at[k], r.at[k + 1] - r.at[k], ink);
-    }
-}
-
-/* The last `fit` rows, laid out from the top of the band downwards. When there is
- * more text than fits, the tail is what matters: the newest sentence is the one
- * being read, and a band that shows the first rows instead hides the end of the
- * answer under the fold.
- *
- * Reports where the text ended, so a caret can sit immediately after the last
- * letter. Working that out here rather than in the caller keeps the two from
- * drifting apart: a caret placed by its own arithmetic ends up on some other row. */
-static double text_tail(IoCtx *c, const TextFont *f, int32_t top, int fit, int32_t width,
-                        const char *full, uint32_t len, uint32_t vis, IoColor ink,
-                        double off, const Span *hl, size_t hl_n, IoColor hot,
-                        int32_t *end_x, int32_t *end_y) {
-    const char *base = full;
-    Rows r;
-    uint32_t left = len;
-    size_t k;
-
-    /* The rows are cut from the WHOLE paragraph, not from what has been revealed.
-     * Laid out on the visible prefix, a word that does not fit is drawn for a while on
-     * the line it started on and then jumps whole to the next one, already half typed,
-     * so it reads as the word being typed twice. Deciding every break before the first
-     * character is drawn puts each word on the line it will stay on, and the text then
-     * appears where it belongs instead of moving under the caret. */
-    r.at[0] = 0;
-    r.n = 0;
-    while (left > 0 && r.n < ROWS_MAX) {
-        uint32_t rest = 0;
-        (void)ui_wrap_row(f, full, left, width, &rest);
-        /* Only "no progress" ends the split. Comparing the row's byte count against
-         * r.at[r.n], an absolute offset that grows with every row, looks like a guard
-         * and is not one: it fires the moment two neighbouring rows happen to be the
-         * same length in bytes, and the rest of the paragraph is silently dropped.
-         * That is data dependent, which is why it read as a broken room rather than a
-         * broken engine. */
-        if (rest == 0) {
-            break;
-        }
-        left -= rest;
-        full += rest;
-        r.n++;
-        r.at[r.n] = r.at[r.n - 1] + rest;
-    }
-    {
-        /* The whole block slides by a pixel offset instead of dropping whole rows, and
-         * the caller eases toward the offset returned here. Skip is a floor so the row
-         * crossing the top edge is drawn half out rather than not at all. */
-        double want = (r.n > (size_t)fit)
-                    ? (double)(r.n - (size_t)fit) * f->line_height : 0.0;
-        size_t skip;
-        int32_t shift;
-
-        if (off < 0.0) {
-            off = 0.0;
-        }
-        if (off > want) {
-            off = want;
-        }
-        skip = (size_t)(off / (double)f->line_height);
-        shift = (int32_t)off - (int32_t)skip * f->line_height;
-        *end_x = PAD;
-        *end_y = top + f->ascent - shift;
-        for (k = skip; k < r.n; k++) {
-            uint32_t from = r.at[k];
-            uint32_t to = r.at[k + 1];
-            int32_t y = top + f->ascent - shift + (int32_t)(k - skip) * f->line_height;
-
-            if (from >= vis) {
-                break;
-            }
-            if (to > vis) {
-                to = vis;
-            }
-            /* Drawn in pieces so a highlighted run can change colour without the row
-             * being laid out twice. Splits fall on fragment boundaries, which are
-             * whole UTF-8 sequences, so no piece ever starts mid-character. */
-            {
-                uint32_t p = from;
-
-                while (p < to) {
-                    uint32_t seg = to;
-                    IoColor col = ink;
-                    size_t q;
-
-                    for (q = 0; q < hl_n; q++) {
-                        uint32_t a = hl[q].off;
-                        uint32_t b = a + hl[q].len;
-
-                        if (p >= a && p < b) {
-                            col = hot;
-                            if (b < seg) {
-                                seg = b;
-                            }
-                            break;
-                        }
-                        if (p < a && a < seg) {
-                            seg = a;
-                        }
-                    }
-                    if (seg <= p) {
-                        seg = p + 1;
-                    }
-                    if (seg > to) {
-                        seg = to;
-                    }
-                    /* Each piece starts where the ones before it end. Drawing them all
-                     * at the left margin piles the row into itself, which looks like
-                     * garbled text rather than a coloured run. */
-                    text_draw(c, f, PAD + text_width(f, base + from, p - from), y,
-                              base + p, seg - p, col);
-                    p = seg;
-                }
-            }
-            if (to == vis) {
-                /* The caret belongs after the last character that arrived, which is the
-                 * end of whatever row the reveal currently stops in. */
-                *end_x = PAD + text_width(f, base + from, to - from);
-                *end_y = y;
-            }
-        }
-        return want;
-    }
-}
-
-
-static void note_room_fragments(Ui *ui, const Game *g);
-
-/* Works out which fragments the last command brought in, so the description can point
- * at them. Called once per action, not per frame: the highlight is meant to sit there
- * until the player does something else. */
-void ui_mark_new_fragments(Ui *ui, const Game *g) {
-    char buf[PARA_MAX];
-    FragSpan sp[FRAG_MAX];
-    size_t n = 0;
-    size_t i;
-    size_t j;
-
-    /* A command that walks into another room did not bring that room into being. Every
-     * fragment in it is new to the player and none of it is news, so the baseline is
-     * recorded and nothing is marked. Without this the whole new room lights up. */
-    if (g->room != ui->last_room) {
-        /* Deliberately not recording the baseline here. This runs the instant the
-         * command returns, and whether the room's text can be assembled yet is a
-         * matter of timing; recording an empty baseline means the next action inside
-         * that room finds every fragment new and paints the whole room. The baseline is
-         * taken lazily by draw, on a frame where the room is already on screen. */
-        ui->last_room = g->room;
-        ui->frag_line_n = 0;
-        ui->frag_hot_n = 0;
-        return;
-    }
-    ui->frag_hot_n = 0;
-    /* The count comes back from the call. Looking for the end of the array by
-     * inspecting entries nobody wrote is reading uninitialised stack, and what is
-     * there differs between toolchains: the same source then marks a different number
-     * of fragments on Linux and on Windows, which is exactly what it did. */
-    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX, &n) == 0) {
-        return;
-    }
-    for (i = 0; i < n; i++) {
-        for (j = 0; j < ui->frag_line_n; j++) {
-            if (ui->frag_line[j] == sp[i].line) {
-                break;
-            }
-        }
-        if (j == ui->frag_line_n && ui->frag_line_n < FRAG_MAX) {
-            /* Not seen before in this room, so it turned up because of the action. */
-            ui->frag_line[ui->frag_line_n++] = sp[i].line;
-            if (ui->frag_hot_n < FRAG_MAX) {
-                ui->frag_hot[ui->frag_hot_n++] = sp[i].line;
-            }
-        }
-    }
-}
-
-/* Entering a room is not news about that room, so nothing in it lights up. That means
- * the room's own fragments have to be recorded as already shown, and they are: forget
- * the marks without doing this and the first action taken inside the room finds every
- * line of the description new, and the whole room turns colour. */
-static void note_room_fragments(Ui *ui, const Game *g) {
-    char buf[PARA_MAX];
-    FragSpan sp[FRAG_MAX];
-    size_t n = 0;
-    size_t i;
-
-    ui->frag_line_n = 0;
-    ui->frag_hot_n = 0;
-    if (game_room_text_spans(g, buf, sizeof buf, sp, FRAG_MAX, &n) == 0) {
-        return;
-    }
-    for (i = 0; i < n; i++) {
-        if (ui->frag_line_n < FRAG_MAX) {
-            ui->frag_line[ui->frag_line_n++] = sp[i].line;
-        }
-    }
-}
-
-/* Band geometry for this frame.
- *
- * The system bands grow down from the top, the play bands grow up from the bottom, and
- * the description takes what is left in between: no empty space, and no band taller than
- * its content. The answer is the one that gives way, because it already scrolls. */
-typedef struct Layout {
-    int32_t ctrl_y, ctrl_h;
-    int32_t name_y, name_h;
-    int32_t desc_y, desc_h;
-    int32_t cmd_y, cmd_h, tile_y, pick_y;
-    int32_t resp_y, resp_h;
-    int32_t items_y, items_h;
-    int32_t chip_rows;
-    int overfull;                  /* the frame held more than 480 pixels */
-} Layout;
-
-static Layout compute_layout(Ui *ui, const char *desc, uint32_t desc_len,
-                             const char *ans, uint32_t ans_n) {
-    const TextFont *f = ui->font;
-    Layout L;
-    Sym choices[MAX_CHOICES];
-    const char *trailing = NULL;
-    size_t n = 0;
-    uint32_t desc_n;
-    int32_t yb;
-    int32_t rows;
-
-    L.ctrl_y = 0;
-    L.ctrl_h = CTRL_H;
-    L.name_y = CTRL_H;
-    L.name_h = NAME_H;
-    L.desc_y = CTRL_H + NAME_H;
-
-    L.overfull = 0;
-    L.items_h = ITEMS_H;
-    L.items_y = GAME_H - L.items_h;
-    yb = L.items_y;
-
-    /* While the answer is still being written, the band keeps the command that caused it
-     * and offers nothing, so it needs no row of choices yet. */
-    if (!ui->done && ui->have_last) {
-        L.chip_rows = 0;
-    } else {
-        n = ui_gather_pick(ui, choices, MAX_CHOICES);
-        if (ui->cmd.filled > 0) {
-            trailing = "назад";
-        }
-        L.chip_rows = ui_chip_rows_needed(f, ui, choices, n, trailing);
-    }
-    L.cmd_h = CMD_PAD + TILE_H + CMD_PAD + L.chip_rows * CHIP_H +
-              (L.chip_rows > 0 ? (L.chip_rows - 1) * CHIP_GAP : 0) + CMD_PAD;
-    if (L.chip_rows == 0) {
-        L.cmd_h = CMD_PAD + TILE_H + CMD_PAD;
-    }
-    L.cmd_y = yb - L.cmd_h;
-    yb = L.cmd_y;
-    /* Absolute, not offsets inside the band: the draw calls take canvas coordinates. */
-    L.tile_y = L.cmd_y + CMD_PAD;
-    L.pick_y = L.cmd_y + CMD_PAD + TILE_H + CMD_PAD;
-
-    /* The description is exactly its own text. It used to take the remainder, which
-     * sounds generous and is not: when the answer and the command band together wanted
-     * more than the canvas had, the remainder went negative and the description was
-     * quietly clipped, with only the first lines showing. A band that must not lose
-     * text gets the height of that text. */
-    (void)desc_len;
-    desc_n = (desc != NULL && desc[0] != '\0')
-                 ? ui_rows_of(f, desc, (uint32_t)strlen(desc), GAME_W - 2 * MARGIN_X)
-                 : 0;
-    {
-        int32_t want = desc_n * f->line_height + 2 * PAD;
-        int32_t avail = yb - L.desc_y;
-
-        if (want > avail - RESP_MIN_H) {
-            want = avail - RESP_MIN_H;
-        }
-        if (want < f->line_height + 2 * PAD) {
-            want = f->line_height + 2 * PAD;
-        }
-        L.desc_h = want;
-    }
-
-    /* The answer takes what is left, and it is the one that gives: it already scrolls
-     * its tail, so a short band costs the reader a scroll and a clipped description
-     * costs them the room. */
-    rows = (ans_n > 0) ? ui_rows_of(f, ans, ans_n, GAME_W - 2 * MARGIN_X) : 1;
-    L.resp_h = yb - L.desc_y - L.desc_h;
-    (void)rows;
-    if (L.resp_h < rows * f->line_height + 2 * PAD) {
-        L.resp_h = rows * f->line_height + 2 * PAD;
-    }
-    if (L.resp_h < RESP_MIN_H) {
-        L.resp_h = RESP_MIN_H;
-    }
-    L.resp_y = L.cmd_y - L.resp_h;
-    if (L.resp_y < L.desc_y + L.desc_h) {
-        /* Genuinely over-full. Reported rather than hidden, so the walkthrough can name
-         * the room instead of the picture just looking wrong. */
-        L.overfull = 1;
-        L.resp_h = L.cmd_y - L.desc_y - L.desc_h;
-        if (L.resp_h < 0) {
-            L.resp_h = 0;
-        }
-        L.resp_y = L.cmd_y - L.resp_h;
-    }
-    return L;
-}
-
-/* The chosen words as slots. One function for both rows, because they were two copies
- * of the same loop differing only in which array they read: the command being typed and
- * the command that produced the answer still being written. A second copy is a second
- * place to forget the label, the padding or the hit rectangle. */
-static int32_t draw_slots(Ui *ui, IoCtx *c, const TextFont *f, int32_t x, int32_t y,
-                          const Sym *slot, size_t filled) {
-    char label[LABEL_MAX];
-    size_t i;
-
-    for (i = 0; i < filled; i++) {
-        uint32_t len = ui_chip_label(ui, slot[i], label, sizeof label);
-
-        x = ui_draw_tile(c, f, x, y, label, len, 1);
-    }
-    return x;
-}
-
-static Layout layout_commands(Ui *ui, const char *desc, uint32_t desc_len,
-                             const char *ans, uint32_t ans_n) {
-    IoCtx *c = ui->ctx;
-    const TextFont *f = ui->font;
-    Sym choices[MAX_CHOICES];
-    int32_t x = MARGIN_X;
-    size_t n = 0;
-    Layout L = compute_layout(ui, desc, desc_len, ans, ans_n);
-
-    if (!ui->done && ui->have_last) {
-        /* While the answer is still being written, the command that caused it stays in
-         * full. Clearing the row the moment the command runs throws away the object,
-         * which is the part the player is least likely to remember. */
-        (void)draw_slots(ui, c, f, x, L.tile_y, ui->last.slot,
-                         (size_t)ui->last.filled);
-        return L;
-    }
-    x = draw_slots(ui, c, f, x, L.tile_y, ui->cmd.slot, (size_t)ui->cmd.filled);
-    {
-        static const char pick[] = "?";
-
-        x = ui_draw_tile(c, f, x, L.tile_y, pick, (uint32_t)(sizeof pick - 1), 0);
-    }
-    (void)x;
-
-    n = ui_gather_pick(ui, choices, MAX_CHOICES);
-    if (n == 0) {
-        static const char none[] = "здесь нечего делать";
-
-        ui_text_at(c, f, MARGIN_X, L.pick_y + (TILE_H - f->line_height) / 2, none,
-                (uint32_t)(sizeof none - 1), C_DIM);
-    }
-    (void)ui_draw_chip_rows(c, ui, f, L.pick_y, choices, n, HIT_WORD,
-                         (ui->cmd.filled > 0) ? "назад" : NULL);
-    return L;
-}
-
-/* ------------------------------------------------------------ saves -- */
-
-/* A save is the room and the flags, and nothing else. The log is display: it is
- * rebuilt by entering the room again, which is both smaller than writing it out
- * and more correct, because the fragments that print are chosen by the flags that
- * were just restored. One file per game, in the working directory. */
 
 static void save_file(const GameDef *def, char *out, size_t cap) {
     snprintf(out, cap, "%s.save", def->key);
@@ -726,7 +287,7 @@ static int do_load(Ui *ui, Game *g, const GameDef *def) {
     return 1;
 }
 
-static void draw(Ui *ui) {
+static void ui_draw(Ui *ui) {
     IoCtx *c = ui->ctx;
     const TextFont *f = ui->font;
     const Game *g = ui->game;
@@ -759,7 +320,7 @@ static void draw(Ui *ui) {
      * the command did on the way here, the fragments currently visible are the ones
      * that were already there and nothing may light up on account of arriving. */
     if (ui->frag_line_n == 0) {
-        note_room_fragments(ui, g);
+        ui_note_room_fragments(ui, g);
     }
 
     io_fill_rect(c, (IoRect){ 0, 0, GAME_W, GAME_H }, C_BG);
@@ -770,16 +331,16 @@ static void draw(Ui *ui) {
                    ? block_text(g, cmd + 1, block_end(g, cmd), para, sizeof para)
                    : 0;
     desc_n = game_room_text(g, dpara, sizeof dpara);
-    L = compute_layout(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
+    L = ui_compute_layout(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
 
-    band(c, L.ctrl_y, L.ctrl_h, C_BAND);
-    band(c, L.name_y, L.name_h, C_BAND);
-    band(c, L.desc_y, L.desc_h, C_FIELD);
-    band(c, L.cmd_y, L.cmd_h, C_BAND);
-    band(c, L.items_y, L.items_h, C_BAND);
-    band(c, L.resp_y, L.resp_h, C_FIELD);
+    ui_band(c, L.ctrl_y, L.ctrl_h, C_BAND);
+    ui_band(c, L.name_y, L.name_h, C_BAND);
+    ui_band(c, L.desc_y, L.desc_h, C_FIELD);
+    ui_band(c, L.cmd_y, L.cmd_h, C_BAND);
+    ui_band(c, L.items_y, L.items_h, C_BAND);
+    ui_band(c, L.resp_y, L.resp_h, C_FIELD);
 
-    /* control band: the game on the left, the way out on the right */
+    /* control ui_band: the game on the left, the way out on the right */
     ui_text_at(c, f, MARGIN_X, L.ctrl_y + (L.ctrl_h - f->line_height) / 2, ui->game_title,
             (uint32_t)strlen(ui->game_title), C_DIM);
     {
@@ -801,13 +362,13 @@ static void draw(Ui *ui) {
                           sizeof new_label, C_CHIP, HIT_NEW);
     }
 
-    /* name band */
+    /* name ui_band */
     if (room != (size_t)-1) {
         ui_text_at(c, f, MARGIN_X, L.name_y + (L.name_h - f->line_height) / 2, g->log_head[room],
                 g->log_len[room], C_NAME);
     }
 
-    /* Description band: one paragraph, no break where the script has one. It is built
+    /* Description ui_band: one paragraph, no break where the script has one. It is built
      * from the room's fragments against the flags as they are now, not read out of the
      * log, so a fragment that has appeared or vanished after a command is on screen at
      * once. Reading the log left the player looking at the room as it was on entry. */
@@ -843,7 +404,7 @@ static void draw(Ui *ui) {
         if (fit < 1) {
             fit = 1;
         }
-        ui->dscroll_want = text_tail(c, f, L.desc_y + PAD, fit, GAME_W - 2 * MARGIN_X,
+        ui->dscroll_want = ui_text_tail(c, f, L.desc_y + PAD, fit, GAME_W - 2 * MARGIN_X,
                                      dpara, (uint32_t)desc_n, (uint32_t)desc_n, C_INK,
                                      ui->dscroll, hl, hl_n, C_HOT, &ex, &ey);
         if (!ui->animate) {
@@ -860,8 +421,8 @@ static void draw(Ui *ui) {
      * Keyed on the room rather than on the click, so loading and starting a new game
      * reset it too. */
 
-    /* command band */
-    (void)layout_commands(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
+    /* command ui_band */
+    (void)ui_layout_commands(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
 
     /* The strip of what the player is carrying. A flag whose name starts with an
      * underscore is state rather than a thing, and the underscore is the only marker
@@ -919,7 +480,7 @@ static void draw(Ui *ui) {
         }
     }
 
-    /* answer band, typed out */
+    /* answer ui_band, typed out */
     io_push_clip(c, (IoRect){ 0, L.resp_y, GAME_W, L.resp_h });
     if (cmd != (size_t)-1) {
         size_t n = answer_n;
@@ -944,7 +505,7 @@ static void draw(Ui *ui) {
             }
         }
 
-        ui->scroll_want = text_tail(c, f, top, fit, GAME_W - 2 * MARGIN_X, para,
+        ui->scroll_want = ui_text_tail(c, f, top, fit, GAME_W - 2 * MARGIN_X, para,
                                     (uint32_t)n, (uint32_t)vis, C_INK, ui->scroll, NULL, 0,
                                     C_INK, &end_x, &end_y);
         if (!ui->animate) {
@@ -964,7 +525,7 @@ static void draw(Ui *ui) {
          * gave it, from one to four, and the hint that named two slots was wrong for
          * every command that is not two words long. */
         static const char hint[] = "Выберите действие.";
-        text_top(c, f, L.resp_y + PAD, GAME_W - 2 * MARGIN_X, hint,
+        ui_text_top(c, f, L.resp_y + PAD, GAME_W - 2 * MARGIN_X, hint,
                  (uint32_t)(sizeof hint - 1), C_DIM);
     }
     io_pop_clip(c);
@@ -1155,22 +716,6 @@ static void keep_worst(Worst *w, int32_t v, const char *what) {
 }
 
 /* How many lines a paragraph takes at this width: the same greedy wrap as the drawing. */
-int32_t ui_rows_of(const TextFont *f, const char *t, uint32_t len, int32_t width) {
-    uint32_t left = len;
-    int32_t rows = 0;
-
-    while (left > 0 && rows < 256) {
-        uint32_t rest = 0;
-        (void)ui_wrap_row(f, t, left, width, &rest);
-        if (rest == 0) {
-            break;
-        }
-        left -= rest;
-        t += rest;
-        rows++;
-    }
-    return rows;
-}
 
 /* The widest a row of word chips can get, given the words that could appear in it. */
 static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
@@ -1195,8 +740,8 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
     const TextFont *f = ui->font;
     /* The floor, not a sample: one row of chips and the shortest answer the engine
      * will settle for, with nothing spare. Asking the layout instead means asking
-     * about an empty description, which sizes the band to nothing and then reports
-     * that every room overflows a band that in fact scrolls. */
+     * about an empty description, which sizes the ui_band to nothing and then reports
+     * that every room overflows a ui_band that in fact scrolls. */
     int32_t cmd_min_h = CMD_PAD + TILE_H + CMD_PAD + CHIP_H + CMD_PAD;
     int32_t desc_floor = GAME_H - CTRL_H - NAME_H - ITEMS_H - cmd_min_h - RESP_MIN_H;
     int32_t fit_desc = (desc_floor - 2 * PAD) / f->line_height;
@@ -1253,8 +798,8 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
         keep_worst(&w_name, (int32_t)text_width(f, r->title, r->title_len), what);
 
         /* Every room, not just the rooms the winning path walks through. The
-         * description is the one band that must never lose text, so it is checked
-         * against the smallest band the engine can be forced to give it: one row of
+         * description is the one ui_band that must never lose text, so it is checked
+         * against the smallest ui_band the engine can be forced to give it: one row of
          * chips and the minimum answer. If it fits there, it fits anywhere. */
         {
             char room_para[PARA_MAX];
@@ -1397,7 +942,7 @@ static int run_layout_audit(Ui *ui, Game *g, const Script *s) {
         printf("\nописание влезает в каждой из %d комнат\n", (int)s->room_count);
     }
         /* Width is no longer pass or fail. A row of chips too wide to fit wraps, and
-         * the band grows to hold it; the item strip does not wrap and says how many
+         * the ui_band grows to hold it; the item strip does not wrap and says how many
          * things it is hiding. Each is reported on its own terms. */
         if (w_slots.value > usable - CHIP_ROW_RESERVE ||
             w_pick.value > usable - CHIP_ROW_RESERVE) {
@@ -1536,7 +1081,7 @@ static int run_walkthrough(Ui *ui, Game *g, const Script *s, const char *dir) {
         ui->animate = 0;
         ui->done = 1;
         ui->cmd.filled = 0;
-        draw(ui);
+        ui_draw(ui);
         snprintf(name, sizeof name, "%s/frame%02d.ppm", dir, step);
         dump_ppm(name, ui->ctx->pixels, ui->ctx->w, ui->ctx->h);
         if (step > steps) {
@@ -1946,7 +1491,7 @@ int main(int argc, char **argv) {
             double t_draw = now_ms();
 
             dirty = 0;
-            draw(&ui);
+            ui_draw(&ui);
             if (ctx.backend != NULL && ctx.backend->present != NULL) {
                 ctx.backend->present(ctx.backend->self, &ctx);
             }
