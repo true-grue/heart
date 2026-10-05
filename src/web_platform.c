@@ -27,7 +27,6 @@ typedef struct WebState {
     int32_t fixed_w, fixed_h;  /* test key asked for a resolution: browser scales nothing */
     int32_t win_w, win_h;      /* window in CSS pixels, for the letterbox */
     int32_t css_w, css_h;      /* box the canvas is shown in, to notice a change */
-    int fs;                    /* canvas is the fullscreen element: placed, not offset */
     int settle;                /* frames left to keep remeasuring the window */
     double dpr;        /* backing pixels per CSS pixel */
     uint32_t *stage;   /* backing sized, 0xRRGGBB, filled by io_scale_canvas */
@@ -71,20 +70,20 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h, int crisp), {
        smaller than the canvas; there the canvas is shrinking and dropping every other
        pixel would lose more than smoothing costs. */
     c.style.imageRendering = crisp ? "pixelated" : "auto";
-    if (document.fullscreenElement === c) {
-        /* A fullscreen canvas is the whole screen, so the offsets that centre it in the
-         * page push it off instead: the top strip with the buttons is what goes missing,
-         * and a button that cannot be pressed is a dead control. */
-        c.style.position = "static";
-        c.style.left = "0px";
-        c.style.top = "0px";
-    } else {
-        /* Centred here rather than by the page's layout: a whole-number scale leaves bars
-         * of up to a whole row and column, and they have to end up the same on both sides. */
-        c.style.position = "absolute";
-        c.style.left = Math.max(0, Math.floor((window.innerWidth - css_w) / 2)) + "px";
-        c.style.top = Math.max(0, Math.floor((window.innerHeight - css_h) / 2)) + "px";
-    }
+    /* Centred here rather than by the page's layout: a whole-number scale leaves bars of
+     * up to a whole row and column, and they have to end up the same on both sides. Fullscreen
+     * is the document and not the canvas, so the page layout is what holds in both modes.
+     *
+     * The layout viewport, not window.innerWidth, and that is not fussiness: the size the
+     * canvas was fitted to comes from documentElement.clientHeight, and the two are the
+     * same number on a desktop and different on a phone, where innerHeight counts the
+     * address bar that slides away. Fitting to one and centring in the other left the
+     * field sitting off centre after a fullscreen toggle, and only on Android. */
+    var pw = document.documentElement.clientWidth;
+    var ph = document.documentElement.clientHeight;
+    c.style.position = "absolute";
+    c.style.left = Math.max(0, Math.floor((pw - css_w) / 2)) + "px";
+    c.style.top = Math.max(0, Math.floor((ph - css_h) / 2)) + "px";
     /* none, so the only gestures that reach this game are the game's own. A browser free
      * to pinch and pan the page underneath a canvas sized in whole multiples turns the
      * scale into whatever the last gesture left, which is the one thing the integer
@@ -126,14 +125,6 @@ EM_JS(int, web_key_size, (int which), {
 EM_JS(int, web_window_w, (void), { return document.documentElement.clientWidth | 0; })
 EM_JS(int, web_window_h, (void), { return document.documentElement.clientHeight | 0; })
 
-/* Whether the canvas is the fullscreen element. Entering and leaving it changes how the
- * canvas is placed and not how big it is, so the size alone does not tell the sizing code
- * that anything happened. */
-EM_JS(int, web_canvas_is_fullscreen, (void), {
-  var c = document.getElementById("canvas");
-  return (c && document.fullscreenElement === c) ? 1 : 0;
-})
-
 /* Canvas ImageData is RGBA, a 0xRRGGBB word in little endian memory is B,G,R,0, and
  * alpha is opaque everywhere. Byte order is the platform's business: the framebuffer is
  * only read here, never written. */
@@ -170,7 +161,6 @@ static void web_resize(void) {
     WebState *st = &g_web;
     int32_t css_w, css_h;
     int crisp = 1;
-    int fs;
 
     if (st->vw <= 0 || st->vh <= 0) {
         return;
@@ -213,17 +203,11 @@ static void web_resize(void) {
         st->w = st->vw;
         st->h = st->vh;
     }
-    /* The mode is part of this: fullscreen moves the canvas by giving up the offsets,
-     * and leaving fullscreen has to put them back. Comparing the size alone left the
-     * canvas at static position 0,0 with the page restored around it, and the button
-     * then measured its bars against a shape that was not there. */
-    fs = web_canvas_is_fullscreen();
-    if (css_w == st->css_w && css_h == st->css_h && fs == st->fs) {
+    if (css_w == st->css_w && css_h == st->css_h) {
         return;   /* nothing moved, and touching the DOM every frame would be waste */
     }
     st->css_w = css_w;
     st->css_h = css_h;
-    st->fs = fs;
     st->dpr = (double)st->w / (double)css_w;
     web_canvas_open(st->w, st->h, css_w, css_h, crisp);
 }
@@ -392,11 +376,14 @@ static int web_pump(void *self, IoCtx *ctx) {
         int ww = web_window_w();
         int wh = web_window_h();
 
-        if (ww > 0 && wh > 0 && (ww != st->win_w || wh != st->win_h)) {
-            st->win_w = ww;
-            st->win_h = wh;
+        if (ww > 0 && wh > 0) {
+            if (ww != st->win_w || wh != st->win_h) {
+                st->win_w = ww;
+                st->win_h = wh;
+                st->settle = WEB_SETTLE;   /* still moving: go on watching */
+            }
+            st->settle--;
         }
-        st->settle--;
     }
     /* The virtual canvas is the one thing needed to size the canvas, and only the context
      * knows it, so the first pump is where the canvas gets its size. Doing it here rather
