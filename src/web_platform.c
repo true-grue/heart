@@ -54,8 +54,15 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h), {
         c.id = "canvas";
         document.body.appendChild(c);
     }
-    c.width = w;
-    c.height = h;
+    /* Assigning width or height clears the canvas, and the application only redraws when
+     * the view changes, which on a resize it does not: the backing store is the same
+     * 640x480 it always is. Setting them again anyway left a black rectangle on screen. */
+    if (c.width !== w) {
+        c.width = w;
+    }
+    if (c.height !== h) {
+        c.height = h;
+    }
     c.style.width = css_w + "px";
     c.style.height = css_h + "px";
     c.style.imageRendering = "pixelated";
@@ -90,11 +97,14 @@ EM_JS(int, web_key_size, (int which), {
     return v > 0 ? v : 0;
 })
 
-/* The window in CSS pixels: what the release path fits the canvas into. */
-EM_JS(void, web_window_size, (int *w, int *h), {
-    w[0] = window.innerWidth | 0;
-    h[0] = window.innerHeight | 0;
-})
+/* The window in CSS pixels: what the release path fits the canvas into. Two functions and
+ * not one with int* out-parameters, because those do not survive the trip into the
+ * browser: the pointer arrives as the number it was pointing at and the write lands
+ * somewhere in the heap. Measured, not reasoned about: it returned 0 and 216900000 where
+ * the window was 1280x817, and the canvas was then sized from a number that was never a
+ * size. */
+EM_JS(int, web_window_w, (void), { return window.innerWidth | 0; })
+EM_JS(int, web_window_h, (void), { return window.innerHeight | 0; })
 
 /* Canvas ImageData is RGBA, a 0xRRGGBB word in little endian memory is B,G,R,0, and
  * alpha is opaque everywhere. Byte order is the platform's business: the framebuffer is
@@ -308,7 +318,8 @@ static int web_pump(void *self, IoCtx *ctx) {
         st->vw = ctx->w;
         st->vh = ctx->h;
         if (!st->have_win) {
-            web_window_size(&ww, &wh);
+            ww = web_window_w();
+            wh = web_window_h();
             if (ww > 0 && wh > 0) {
                 st->win_w = ww;
                 st->win_h = wh;
