@@ -142,8 +142,15 @@ static void web_resize(void) {
     WebState *st = &g_web;
     int32_t css_w, css_h;
 
-    if (st->vw <= 0 || st->vh <= 0 || st->win_w <= 0 || st->win_h <= 0) {
+    if (st->vw <= 0 || st->vh <= 0) {
         return;
+    }
+    if (st->win_w <= 0 || st->win_h <= 0) {
+        /* The window could not be measured, so the size the caller asked for is not used
+         * as a stand-in: that is GAME_W*SCALE, which is 1280x960 and hangs off a window
+         * smaller than itself. One to one is the only fallback that cannot be cropped. */
+        st->win_w = st->vw;
+        st->win_h = st->vh;
     }
     if (st->fixed_w > 0 && st->fixed_h > 0) {
         css_w = st->fixed_w;
@@ -248,21 +255,22 @@ static int web_open(void *self, const char *title, int32_t w, int32_t h) {
     (void)h;
     st->stage = NULL;
     st->stage_cap = 0;
-    st->have_win = 0;
     g_queue_n = 0;
 
     st->fixed_w = web_key_size(0);
     st->fixed_h = web_key_size(1);
-    /* The size the caller asked for is the fallback, not the measurement: at the first
-     * pump the page has not been laid out yet and window.innerWidth is still 0, which
-     * left the canvas unsized and the game with nothing to draw into. A resize reports a
-     * real number and takes over from here. */
-    st->win_w = w;
-    st->win_h = h;
+    /* Nothing is taken from the size the caller asked for. That number is GAME_W*SCALE,
+     * and its only meaning here was how big a window to open; the window belongs to the
+     * browser, and measuring it is the only thing that decides how many times the canvas
+     * is enlarged. Left at zero so that a failure to measure falls back to one to one
+     * rather than to a window-sized box on a window that is not that big. */
+    st->win_w = 0;
+    st->win_h = 0;
+    st->have_win = 0;
 
     /* The canvas cannot be sized here: what it is sized from is the virtual canvas, and
      * the only place that is known is the context, which the backend does not get until
-     * the first pump. The window size is remembered above and applied there. */
+     * the first pump. The window is measured there. */
 
     emscripten_set_mousedown_callback(canvas, NULL, 0, web_mouse_cb);
     emscripten_set_mouseup_callback(canvas, NULL, 0, web_mouse_cb);
