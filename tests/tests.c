@@ -1801,6 +1801,81 @@ static void test_items_fit_shortens_the_longest_first(void) {
     }
 }
 
+/* Shortening must never reduce a name to a bare dot.
+ *
+ * The cut prefers the space, and the space is dropped rather than kept, so a name can in
+ * principle be cut down to the single character the dot stands in for. A dot on its own
+ * says nothing about what was carried, which is worse than the "+N" counter it replaced:
+ * the counter at least admitted that something was missing.
+ *
+ * Checked against the names the shipped games actually have, not a made up list: a dot
+ * can only appear here if some real item's real name is short enough, and that is a
+ * property of the scripts. */
+static void test_no_shipped_item_shortens_to_a_dot(void) {
+    static const char *const paths[] = {
+        "assets/script/tutorial.script",
+        "assets/script/field.script",
+        "assets/script/heart.script"
+    };
+    Arena a;
+    TextFont f;
+    size_t p;
+
+    CHECK_INT(arena_init(&a, g_arena_mem, sizeof g_arena_mem), 0);
+    f = load_font(&a, 16);
+    CHECK_INT(f.count, 197);
+
+    for (p = 0; p < sizeof paths / sizeof paths[0]; p++) {
+        Arena sa;
+        Script sc;
+        Diagnostic d[64];
+        size_t nd = 0;
+        int err_line = 0;
+        char *text;
+        size_t len = 0;
+        static char label[64][LABEL_MAX];
+        uint32_t llen[64];
+        size_t count = 0;
+        size_t i;
+
+        CHECK_INT(arena_init(&sa, g_scratch_mem, sizeof g_scratch_mem), 0);
+        text = read_file(&sa, paths[p], &len);
+        CHECK(text != NULL);
+        if (text == NULL) {
+            continue;
+        }
+        CHECK_INT(script_load(&sa, &sc, text, len, &err_line), SCR_OK);
+        (void)script_validate(&sc, d, sizeof d / sizeof d[0], &nd);
+
+        for (i = 0; i < sc.sym_count && count < 64; i++) {
+            size_t l2 = 0;
+            size_t k;
+            const char *name = script_sym(&sc, (Sym)i, &l2);
+
+            /* An underscore is state rather than a thing, and it is also what a name
+             * with a space in it looks like before the strip has seen it. */
+            if (l2 == 0 || name[0] == '_') {
+                continue;
+            }
+            for (k = 0; k < l2 && k < LABEL_MAX - 2; k++) {
+                label[count][k] = (name[k] == '_') ? ' ' : name[k];
+            }
+            label[count][k] = '\0';
+            llen[count] = (uint32_t)k;
+            count++;
+        }
+        items_fit(&f, label, llen, count);
+
+        for (i = 0; i < count; i++) {
+            CHECK(llen[i] > 0);
+            if (llen[i] == 1) {
+                /* A name that ends up as just a dot says nothing at all. */
+                CHECK(strlen(label[i]) > 1);
+            }
+        }
+    }
+}
+
 static void test_text_font_loads(void) {
     Arena a;
     TextFont f;
@@ -2085,6 +2160,7 @@ const test_case test_cases[] = {
     TEST_CASE(test_io_rejects_oversized_polygon_without_drawing_part),
     TEST_CASE(test_io_backend_test_is_inert),
     TEST_CASE(test_items_fit_shortens_the_longest_first),
+    TEST_CASE(test_no_shipped_item_shortens_to_a_dot),
     TEST_CASE(test_text_font_loads),
     TEST_CASE(test_text_glyph_lookup),
     TEST_CASE(test_text_advances_scale),
