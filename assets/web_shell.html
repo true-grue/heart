@@ -1,21 +1,29 @@
 <!doctype html>
 <meta charset="utf-8">
-<!-- Without this a phone lays the page out at about 980 px and shrinks it to fit, which is
-     why the game looked wrong on a handset and why there was nothing sensible to pinch.
-     user-scalable is here so two fingers may zoom: the canvas keeps a whole-number scale
-     and a player who wants it bigger gets it from the browser, which is the one scaler
-     that can follow a gesture continuously. -->
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
+<!-- initial-scale and nothing else. The canvas is sized by the backend in whole multiples
+     and the browser magnifies whatever it likes on top of that, so nothing here may pin
+     the scale: a page that says how big it is has already taken the choice away from the
+     two finger zoom a player on a phone expects to work. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quest</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  /* pinch-zoom, not none: none here would forbid the two finger zoom as well, and the
-     platform sets the same value inline so the two cannot drift apart silently. */
-  #canvas { display: block; touch-action: pinch-zoom; margin: 0 auto; }
+  /* No touch-action here on purpose. Setting it to none also forbids the browser's own
+     pinch zoom, and the backend sets no value either, so both leave it at the default. */
+  #canvas { display: block; margin: 0 auto; }
+  /* The button lives under the canvas and only while there is a bar to live in. A page
+     button on top of the game would sit on Выход, the one control that has to stay
+     reachable. */
+  #full {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 4px;
+    font: 12px/1 sans-serif; color: #bbb; background: #1b1f27;
+    border: 1px solid #444; border-radius: 3px; padding: 5px 9px; cursor: pointer;
+  }
 </style>
 <body>
 <pre id="fail" hidden style="color:#f66;font:14px/1.4 monospace;padding:10px;white-space:pre-wrap"></pre>
 <canvas id="canvas"></canvas>
+<button id="full" hidden>во весь экран</button>
 <script>
 /* The stock emscripten shell answers a failure with a line of grey text beside its own
  * logo and leaves the canvas black. A black screen is the worst possible report — it
@@ -33,5 +41,34 @@ window.addEventListener("unhandledrejection", function (e) {
   var r = e.reason;
   report(r && r.message ? r.message : String(r), "", 0, 0);
 });
+
+/* Fullscreen, in the bar under the canvas and only while that bar exists. iPhone Safari
+ * has no element fullscreen at all, so the document is the fallback and the request is
+ * guarded: a phone that cannot do it must not get an error for asking. */
+var full = document.getElementById("full");
+function place() {
+  var c = document.getElementById("canvas");
+  var page = document.documentElement;
+  if (!c) { return; }
+  var r = c.getBoundingClientRect();
+  var bar = page.clientHeight - r.bottom;
+  full.hidden = !(bar >= full.offsetHeight + 8);
+  full.style.bottom = Math.max(4, Math.floor(bar / 2) - full.offsetHeight / 2) + "px";
+}
+full.onclick = function () {
+  var c = document.getElementById("canvas");
+  var page = document.documentElement;
+  if (document.fullscreenElement) {
+    if (document.exitFullscreen) { document.exitFullscreen(); }
+    return;
+  }
+  if (c.requestFullscreen) { c.requestFullscreen(); }
+  else if (page.requestFullscreen) { page.requestFullscreen(); }
+  else if (c.webkitRequestFullscreen) { c.webkitRequestFullscreen(); }
+};
+window.addEventListener("resize", place);
+/* The canvas is sized by the backend on its first frame, so its bar does not exist yet
+ * when load fires. */
+setInterval(place, 500);
 </script>
 {{{ SCRIPT }}}

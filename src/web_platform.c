@@ -71,11 +71,9 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h), {
     c.style.position = "absolute";
     c.style.left = Math.max(0, Math.floor((window.innerWidth - css_w) / 2)) + "px";
     c.style.top = Math.max(0, Math.floor((window.innerHeight - css_h) / 2)) + "px";
-    /* pinch-zoom and not none: none also forbids the two finger zoom a player on a phone
-     * expects, and panning is not wanted either because the game handles the drag itself.
-     * What is measured below is the layout viewport rather than window.innerWidth, so a
-     * pinch does not come back as a resize and start the scale changing under the finger. */
-    c.style.touchAction = "pinch-zoom";
+    /* touch-action is deliberately not set. Both none and pinch-zoom were tried here and
+     * pinch-zoom is what the browser already does on its own; saying anything at all only
+     * risks taking the two finger zoom away from a player on a phone. */
     c.style.display = "block";
     var s = document.getElementById("quest_web_css");
     if (!s) {
