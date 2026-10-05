@@ -18,7 +18,7 @@
  *
  * It runs on the test backend: no window, no events, only the framebuffer. */
 
-#define WALK_MAX_SEEN 8192
+#define WALK_MAX_SEEN 524288
 
 /* One queue entry per state, holding the command that reached it and the entry it came
  * from. Breadth first, so the first win found is the shortest route there is, and a
@@ -43,9 +43,16 @@ static int g_win;
 /* The queue is also a set, and the set has to be reached by key. Without it the only
  * way to ask whether a state is already in the graph is to walk every state in it, so
  * a lookup costs the size of the search — heart spent 0.4 s inside that loop before
- * reaching the limit. Open addressing, one slot per entry twice over: the table is
- * sized once for the queue it serves and never grows. */
-#define WALK_SLOT_N 16384u /* power of two, twice WALK_MAX_SEEN */
+ * reaching the limit. Open addressing, one slot per entry.
+ *
+ * Sized from the queue rather than chosen beside it: remember() probes until it finds
+ * an empty slot, so a table smaller than the queue does not degrade, it never
+ * returns. Two facts were folded into one comment, and both were wrong in the same
+ * direction — a limit raised without the table raised with it, and a limit that is not
+ * a power of two so that (size - 1) stops being a mask, each produced an endless probe
+ * that printed nothing at all. So the size is computed, not stated: four times the
+ * queue, rounded up to the power of two the mask needs. */
+static size_t g_slot_n;    /* slots; a power of two, because it is also the mask */
 static int32_t *g_slot;    /* index into g_nodes, or -1 for an empty slot */
 
 /* FNV-1a over exactly what same_state compares: room, finished and the first
@@ -95,7 +102,7 @@ static int node_at_depth(int win, int depth) {
 }
 
 static int already_seen(const GameState *st) {
-    size_t i = (size_t)state_hash(st) & (WALK_SLOT_N - 1u);
+    size_t i = (size_t)state_hash(st) & (g_slot_n - 1u);
 
     /* The whole queue, not just the expanded part. A state is room plus flags and that
      * is the whole of what the future depends on, so a second route to it cannot offer
@@ -104,7 +111,7 @@ static int already_seen(const GameState *st) {
         if (same_state(&g_nodes[g_slot[i]].st, st)) {
             return 1;
         }
-        i = (i + 1u) & (WALK_SLOT_N - 1u);
+        i = (i + 1u) & (g_slot_n - 1u);
     }
     return 0;
 }
@@ -114,10 +121,10 @@ static int already_seen(const GameState *st) {
  * it is queued without its `st` and the search ends on that same turn, so nothing
  * would ever read it back. */
 static void remember(size_t idx) {
-    size_t i = (size_t)state_hash(&g_nodes[idx].st) & (WALK_SLOT_N - 1u);
+    size_t i = (size_t)state_hash(&g_nodes[idx].st) & (g_slot_n - 1u);
 
     while (g_slot[i] >= 0) {
-        i = (i + 1u) & (WALK_SLOT_N - 1u);
+        i = (i + 1u) & (g_slot_n - 1u);
     }
     g_slot[i] = (int32_t)idx;
 }
@@ -139,14 +146,14 @@ static void try_words(Game *g, const GameState *base, int parent, const Sym *pre
     Sym buf[RULE_MAX_WORDS];
     size_t got, i;
 
-    if (g_win >= 0 || wi >= (int)RULE_MAX_WORDS || g_nodes_n >= WALK_MAX_SEEN) {
+    if (wi >= (int)RULE_MAX_WORDS || g_nodes_n >= WALK_MAX_SEEN) {
         return;
     }
     if (wi > 0) {
         memcpy(buf, prefix, sizeof buf);
     }
     got = game_next(g, (wi > 0) ? buf : NULL, (size_t)wi, choices, MAX_CHOICES);
-    for (i = 0; i < got && g_win < 0; i++) {
+    for (i = 0; i < got; i++) {
         Sym w[RULE_MAX_WORDS];
 
         /* The previous candidate left the game somewhere else entirely, and both
@@ -163,15 +170,23 @@ static void try_words(Game *g, const GameState *base, int parent, const Sym *pre
         if (!game_command(g, w, (size_t)wi + 1)) {
             continue;
         }
-        if (g->won) {
+        if (g->finished) {
+            /* Both endings are kept. A win in breadth-first order is the shortest
+             * route and is the one the walkthrough prints, so only the first one is
+             * remembered as g_win; the rest are counted. An end used to be dropped
+             * here with a continue, which meant no run could ever say how many of the
+             * script's endings it had seen. */
+            GameState after;
+
+            game_save(g, &after);
             memcpy(g_nodes[g_nodes_n].words, w, sizeof w);
             g_nodes[g_nodes_n].word_len = (uint8_t)(wi + 1);
             g_nodes[g_nodes_n].parent = parent;
+            g_nodes[g_nodes_n].st = after;
             g_nodes_n++;
-            g_win = (int)g_nodes_n - 1;
-            return;
-        }
-        if (g->finished) {
+            if (g->won && g_win < 0) {
+                g_win = (int)g_nodes_n - 1;
+            }
             continue;
         }
         {
@@ -187,6 +202,10 @@ static void try_words(Game *g, const GameState *base, int parent, const Sym *pre
             g_nodes[g_nodes_n].st = after;
             g_nodes_n++;
             remember(g_nodes_n - 1);
+            if (g_nodes_n % 50000 == 0) {
+                fprintf(stderr, "обход: %lu состояний, разобрано %lu\n",
+                        (unsigned long)g_nodes_n, (unsigned long)g_head);
+            }
         }
     }
 }
@@ -507,6 +526,199 @@ int walk_layout_audit(Ui *ui, Game *g, const Script *s,
     return 0;
 }
 
+/* The room a rule belongs to, or -1. Needed because a terminal state says where the
+ * player stands after the ending, not before it, and the guard is only meaningful for
+ * the room the rule was written in. */
+static int room_of_rule(const Script *s, const Rule *ru) {
+    size_t i, k;
+
+    for (i = 0; i < s->room_count; i++) {
+        for (k = 0; k < s->rooms[i].rule_len; k++) {
+            if (&s->rooms[i].rules[k] == ru) {
+                return (int)i;
+            }
+        }
+    }
+    return -1;
+}
+
+/* Would this rule fire from some state the walk has already reached? True only when a
+ * queued node stands in its room with its guard holding — the same call the game makes,
+ * so there is no second reading of the guard to drift from the first. A node that
+ * qualifies but sits behind g_head simply has not been expanded yet. */
+static int rule_ready(const Script *s, Game *g, const Rule *ru, size_t from,
+                      int same_room) {
+    int room = room_of_rule(s, ru);
+    size_t n;
+
+    if (room < 0) {
+        return 0;
+    }
+    for (n = from; n < g_nodes_n; n++) {
+        if (g_nodes[n].st.finished ||
+            (same_room && g_nodes[n].st.room != s->rooms[room].id)) {
+            continue;
+        }
+        game_restore(g, &g_nodes[n].st);
+        if (game_rule_for(g, ru->words, (size_t)ru->word_len) == ru) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Every win and end rule the script declares, and whether the walk reached it. An
+ * ending that is declared but never fires is content that does not work, and nothing
+ * else in the tree can see it: the tests exercise the loader, the audit reads the
+ * script for layout, and neither one plays the game.
+ *
+ * A terminal state names its rule through the state it came from, not through itself:
+ * find_rule refuses a game that is already over, so the parent is restored first and
+ * the command re-asked. Words alone cannot name it either — heart has four wins that
+ * differ only by guard — which is why game_rule_for exists rather than a copy of the
+ * guard check here.
+ *
+ * Being left out is two different facts, and printing them as one is what makes such a
+ * list useless: the queue may have run out of room before the node that would have
+ * fired the rule was ever expanded, or no reachable state holds the guard at all. So
+ * each miss is asked a second question, and the two answers read differently. */
+static void endings_report(const Script *s, Game *g) {
+    size_t declared = 0, win_n = 0, end_n = 0, reached = 0;
+    size_t i, n;
+    uint8_t *hit;
+    int complete;
+
+    for (i = 0; i < s->rule_count; i++) {
+        ActKind k = s->rules[i].act.kind;
+
+        if (k == ACT_WIN) {
+            declared++;
+            win_n++;
+        } else if (k == ACT_END) {
+            declared++;
+            end_n++;
+        }
+    }
+    if (declared == 0) {
+        return;
+    }
+    hit = (uint8_t *)calloc(s->rule_count, 1);
+    if (hit == NULL) {
+        printf("концовок в скрипте: %lu (win %lu, end %lu), достигнуто: не перечислены, "
+               "нет памяти\n",
+               (unsigned long)declared, (unsigned long)win_n, (unsigned long)end_n);
+        return;
+    }
+    for (n = 1; n < g_nodes_n; n++) {
+        const Rule *ru;
+        int parent;
+        size_t idx;
+
+        if (!g_nodes[n].st.finished) {
+            continue;
+        }
+        parent = g_nodes[n].parent;
+        if (parent < 0) {
+            continue;
+        }
+        game_restore(g, &g_nodes[parent].st);
+        ru = game_rule_for(g, g_nodes[n].words, (size_t)g_nodes[n].word_len);
+        if (ru == NULL || (ru->act.kind != ACT_WIN && ru->act.kind != ACT_END)) {
+            continue;
+        }
+        idx = (size_t)(ru - s->rules);
+        if (idx < s->rule_count && !hit[idx]) {
+            hit[idx] = 1;
+            reached++;
+        }
+    }
+    complete = (g_nodes_n < WALK_MAX_SEEN);
+    printf("состояний: %lu из предела %lu%s\n", (unsigned long)g_nodes_n,
+           (unsigned long)WALK_MAX_SEEN,
+           complete ? " — граф перебран полностью" : " — предел не хватило");
+    printf("концовок в скрипте: %lu (win %lu, end %lu), достигнуто: %lu%s\n",
+           (unsigned long)declared, (unsigned long)win_n, (unsigned long)end_n,
+           (unsigned long)reached, complete ? "" : " (список неполон)");
+    if (reached < declared) {
+        /* One pass over every state in the graph: which flags were ever set and which
+         * were ever clear. It answers the question a bare "not reached" leaves open —
+         * the item was never picked up, or the state exists and the walk simply did not
+         * get there — and it costs one read per flag per state rather than a second
+         * reading of the guard, which would be a copy of the game's own rule. */
+        uint8_t *ever = (uint8_t *)calloc(g->flag_count, 1);
+        uint8_t *taken = (uint8_t *)calloc(g->flag_count, 1);
+
+        for (n = 1; n < g_nodes_n && ever != NULL && taken != NULL; n++) {
+            for (i = 0; i < g->flag_count; i++) {
+                if (g_nodes[n].st.flag_present[i]) {
+                    ever[i] = 1;
+                } else {
+                    taken[i] = 1;
+                }
+            }
+        }
+        printf("не достигнуты:\n");
+        for (i = 0; i < s->rule_count; i++) {
+            ActKind k = s->rules[i].act.kind;
+            const Rule *ru;
+            size_t c;
+            int said = 0;
+
+            if ((k != ACT_WIN && k != ACT_END) || hit[i]) {
+                continue;
+            }
+            ru = &s->rules[i];
+            if (rule_ready(s, g, ru, 1, 1)) {
+                printf("  строка %d — состояние есть, узел не разобран\n", ru->line);
+                continue;
+            }
+            printf("  строка %d — ", ru->line);
+            for (c = 0; c < ru->guard_len && ever != NULL && taken != NULL; c++) {
+                size_t f;
+                int found = 0;
+
+                for (f = 0; f < g->flag_count; f++) {
+                    if (g->flag_name[f] == ru->guard[c].name) {
+                        found = 1;
+                        if ((ru->guard[c].present && !ever[f]) ||
+                            (!ru->guard[c].present && !taken[f])) {
+                            size_t wl = 0;
+                            const char *nm = script_sym(s, ru->guard[c].name, &wl);
+
+                            if (said) {
+                                printf(",");
+                            }
+                            printf(" %c%.*s", ru->guard[c].present ? '+' : '-',
+                                   (int)wl, nm);
+                            said = 1;
+                        }
+                        break;
+                    }
+                }
+                if (!found) {
+                    size_t wl = 0;
+                    const char *nm = script_sym(s, ru->guard[c].name, &wl);
+
+                    printf(" %c%.*s(нет флага)", ru->guard[c].present ? '+' : '-',
+                           (int)wl, nm);
+                    said = 1;
+                }
+            }
+            if (said) {
+                printf(" не бывает ни в одном состоянии\n");
+            } else if (rule_ready(s, g, ru, 1, 0)) {
+                printf("комбинация есть, но не в этой комнате\n");
+            } else {
+                printf("комбинация не собирается нигде\n");
+            }
+        }
+        free(ever);
+        free(taken);
+    }
+    free(hit);
+    game_restore(g, &g_nodes[0].st);
+}
+
 int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
     char path[1024];
     GameState start;
@@ -514,8 +726,12 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
     int steps = 0;
     int written = 0;
 
+    g_slot_n = 1;
+    while (g_slot_n < 4u * WALK_MAX_SEEN) {
+        g_slot_n *= 2;
+    }
     g_nodes = malloc(WALK_MAX_SEEN * sizeof *g_nodes);
-    g_slot = malloc(WALK_SLOT_N * sizeof *g_slot);
+    g_slot = malloc(g_slot_n * sizeof *g_slot);
     if (g_nodes == NULL || g_slot == NULL) {
         fprintf(stderr, "не хватило памяти на очередь обхода\n");
         free(g_nodes);
@@ -524,8 +740,11 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
         g_slot = NULL;
         return 1;
     }
-    for (step = 0; step < (int)WALK_SLOT_N; step++) {
-        g_slot[step] = -1;
+    {
+        size_t si;
+        for (si = 0; si < g_slot_n; si++) {
+            g_slot[si] = -1;
+        }
     }
     g_nodes_n = 0;
     g_head = 0;
@@ -537,11 +756,16 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
     g_nodes_n = 1;
     remember(0);
 
-    while (g_head < g_nodes_n && g_win < 0) {
+    while (g_head < g_nodes_n) {
+        if (g_nodes[g_head].st.finished) {
+            g_head++;
+            continue;
+        }
         game_restore(g, &g_nodes[g_head].st);
         try_words(g, &g_nodes[g_head].st, (int)g_head, NULL, 0);
         g_head++;
     }
+    endings_report(s, g);
     if (g_win < 0) {
         /* Two different facts, and they must not be reported as one. Running out of room
          * is not the same as there being nothing to find, and saying "cannot win" after

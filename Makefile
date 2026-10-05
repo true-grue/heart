@@ -15,6 +15,9 @@ ANALYZE := -fanalyzer
 INC := -Isrc -Itests
 
 BUILD := build
+# The published web build. Not under build/, because build/ is throwaway and this is not:
+# GitHub Pages serves this directory, so it has to be in the repository.
+WEB    := heart
 OBJ   := $(BUILD)/obj
 TOBJ  := $(BUILD)/tobj
 AOBJ  := $(BUILD)/an
@@ -116,7 +119,7 @@ ALL_SRC  := $(LIB_SRC) $(TOOL_SRC) $(TEST_SRC)
 LIB_SRC   := $(strip $(LIB_SRC))
 LIB_OBJ  := $(LIB_SRC:%.c=$(OBJ)/%.o)
 TEST_OBJ := $(ALL_SRC:%.c=$(TOBJ)/%.o)
-AN_OBJ   := $(ALL_SRC:%.c=$(AOBJ)/%.o)
+AN_OBJ   := $(ALL_SRC:%.c=$(AOBJ)/%.o) $(QUEST_SRC:%.c=$(AOBJ)/%.o)
 
 LIB       := $(BUILD)/libquest.a
 TEST_BIN  := $(BUILD)/tests
@@ -185,10 +188,15 @@ $(GAME_BINS): $(BUILD)/%$(EXE): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 # The file name and the game name are different things here, so the two lines above are
 # written out again rather than reached through an alias: an indirection that carried
 # these flags would have to be kept in step by hand, and nothing checks that.
-# Only exists for a web build — everywhere else the suffix is empty and this would name
-# a file nobody asked for.
+# Only exists for a web build — everywhere else the suffix is empty and this would name a
+# file nobody asked for.
+#
+# The web build lands in heart/ and not in build/, because this directory is the one that
+# gets published and therefore the one that has to be committed. A copy step would mean
+# two copies of the same binaries in the tree and nothing to notice them drifting apart.
 ifneq (,$(findstring emcc,$(CC)))
-$(BUILD)/index$(EXE): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
+$(WEB)/index$(EXE): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
+	@mkdir -p $(dir $@)
 	$(CC) $(CSTD) $(WARN) $(REL) $(INC) $(CFLAGS_X) -DGAME_DEFAULT='"heart"' \
 		-o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
 endif
@@ -207,7 +215,7 @@ win:
 # suffix to offer — it is not a web build, it is only the one that asks for one.
 EMCC ?= emcc
 web:
-	$(MAKE) CC=$(EMCC) $(BUILD)/index.html
+	$(MAKE) CC=$(EMCC) $(WEB)/index.html
 
 # The suffix has to be part of the prerequisite: without it a web build asks for
 # build/heart, which the pattern rule below cannot produce, and a native build/heart left

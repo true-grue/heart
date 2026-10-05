@@ -6,6 +6,9 @@ build/
 *.wasm
 *.exe
 
+# опубликованная веб-сборка: в репозитории по делу, её отдаёт GitHub Pages
+!heart/*.wasm
+
 # инструменты
 __pycache__/
 *.pyc

@@ -269,6 +269,10 @@ int game_available(const Game *g, const Sym *words, size_t words_len) {
     return find_rule(g, words, words_len) != NULL;
 }
 
+const Rule *game_rule_for(const Game *g, const Sym *words, size_t words_len) {
+    return find_rule(g, words, words_len);
+}
+
 int game_command(Game *g, const Sym *words, size_t words_len) {
     const Rule *ru = find_rule(g, words, words_len);
     uint32_t i;

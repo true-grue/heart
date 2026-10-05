@@ -132,4 +132,10 @@ int game_more(const Game *g, const Sym *prefix, size_t prefix_len);
 /* True when some rule for this pair would run right now. */
 int game_available(const Game *g, const Sym *words, size_t words_len);
 
+/* The rule a command would run: the first one in the current room whose words match
+ * and whose guard holds, or NULL. The walk needs it because two endings can share
+ * their words — only the guard tells them apart — and it has to name the ending a
+ * state reached rather than count states that look alike. */
+const Rule *game_rule_for(const Game *g, const Sym *words, size_t words_len);
+
 #endif

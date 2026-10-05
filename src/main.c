@@ -265,7 +265,7 @@ static int probe_load(const char *path) {
         return 2;
     }
     if (arena_init(&a, mem, sizeof mem) != 0) {
-
+        free(text);
         printf("arena error\n");
         return 2;
     }

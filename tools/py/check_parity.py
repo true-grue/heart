@@ -21,12 +21,13 @@ import subprocess
 import sys
 import tempfile
 
-# Default is the small hand written game and nothing else. Parity is a comparison of
-# frames between two builds, not a walk of the whole state graph, so paying for heart's
-# search buys nothing: heart took long enough under Wine to look like a hang. The rest
-# are still there for when you want them:
-#   make parity PARITY_GAMES="tutorial field heart"
+# Parity is a comparison of frames between two builds, not a walk of the whole state
+# graph, so heart is refused outright: its search pays for nothing here and took long
+# enough under Wine to look like a hang. Reachable endings are a different question and
+# tools/py/walk.py answers it. Field is allowed and cheap:
+#   make parity PARITY_GAMES="tutorial field"
 DEFAULT_GAMES = ("tutorial",)
+FORBIDDEN = ("heart",)
 WIN_CC = "x86_64-w64-mingw32-gcc"
 EXE = os.path.join("build", "quest.exe")
 
@@ -88,6 +89,16 @@ def compare_game(game, tmp, use_wine):
 
 def main():
     games = tuple(sys.argv[1:]) or DEFAULT_GAMES
+    # Отказ, а не предупреждение: молчаливый запуск дорогой проверки выглядит
+    # как успех, а успеха тут нет — есть ожидание, которое не выдержало.
+    bad = [g for g in games if g in FORBIDDEN]
+    if bad:
+        print("parity не гоняется на %s: сверяются кадры, а не достижимость, "
+              "а поиск по графу heart под Wine выглядит как зависание."
+              % ", ".join(bad))
+        print("достижимость концовок: python3 tools/py/walk.py --endings "
+              "assets/script/heart.script")
+        return 1
     if not have("wine") or not have(WIN_CC) or not os.path.exists(EXE):
         missing = []
         if not have("wine"):
