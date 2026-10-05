@@ -55,8 +55,13 @@ ifneq (,$(findstring emcc,$(CC)))
 LIB_SRC   += src/web_platform.c
 CFLAGS_X  := -DIO_WEB -sASYNCIFY
 WEB_SHELL := assets/web_shell.html
-LDFLAGS_X := -sASYNCIFY --preload-file assets@/assets --exclude-file $(WEB_SHELL) \
-            --shell-file $(WEB_SHELL)
+# ALLOW_MEMORY_GROWTH is not an optimisation, it is the framebuffer. web_present allocates
+# window_w*dpr * window_h*dpr * 4 on every resize, so the heap a page needs is whatever the
+# visitor's screen asks for: 2560x1920 is 19.7 MB on its own. Without growth the heap is
+# capped at its initial size and a large window aborts with OOM, which is a crash the
+# visitor sees and nobody reproduces locally on a small window.
+LDFLAGS_X := -sASYNCIFY -sALLOW_MEMORY_GROWTH --preload-file assets@/assets \
+            --exclude-file $(WEB_SHELL) --shell-file $(WEB_SHELL)
 EXE       := .html
 else ifneq (,$(findstring mingw,$(CC)))
 LIB_SRC   += src/win_platform.c
