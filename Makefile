@@ -129,7 +129,7 @@ $(CONFIG):
 
 DEP := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(AN_OBJ:.o=.d)
 
-.PHONY: all test parity complexity duplicates analyze demo demo-asan win clean $(GAMES)
+.PHONY: all test parity complexity duplicates analyze demo demo-asan win web clean $(GAMES)
 
 all: $(LIB)
 
@@ -167,6 +167,18 @@ $(GAME_BINS): $(BUILD)/%$(EXE): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(REL) $(INC) $(CFLAGS_X) -DGAME_DEFAULT='"$*"' \
 		-o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
 
+# The page a bare static server opens is index.html, and the game behind it is heart.
+# The file name and the game name are different things here, so the two lines above are
+# written out again rather than reached through an alias: an indirection that carried
+# these flags would have to be kept in step by hand, and nothing checks that.
+# Only exists for a web build — everywhere else the suffix is empty and this would name
+# a file nobody asked for.
+ifneq (,$(findstring emcc,$(CC)))
+$(BUILD)/index$(EXE): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
+	$(CC) $(CSTD) $(WARN) $(REL) $(INC) $(CFLAGS_X) -DGAME_DEFAULT='"heart"' \
+		-o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
+endif
+
 $(QUEST_ASAN): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) $(INC) $(CFLAGS_X) -o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
 
@@ -175,7 +187,19 @@ $(QUEST_ASAN): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 win:
 	$(MAKE) CC=x86_64-w64-mingw32-gcc quest
 
-$(GAMES): %: $(BUILD)/%
+# The same idea for the web: the compiler is named once and the build changes with it.
+# emcc is on PATH after the emsdk environment script is sourced; EMCC names a specific
+# one when it is not. The target is spelled out because the outer make has no .html
+# suffix to offer — it is not a web build, it is only the one that asks for one.
+EMCC ?= emcc
+web:
+	$(MAKE) CC=$(EMCC) $(BUILD)/index.html
+
+# The suffix has to be part of the prerequisite: without it a web build asks for
+# build/heart, which the pattern rule below cannot produce, and a native build/heart left
+# over from an earlier run satisfies the target instead — reporting success for a page
+# that was never written.
+$(GAMES): %: $(BUILD)/%$(EXE)
 
 demo: $(STRESS)
 demo-asan: $(STRESS_ASAN)
