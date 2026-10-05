@@ -51,8 +51,9 @@ HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null >/dev/null 2>&1 
 ifneq (,$(findstring emcc,$(CC)))
 LIB_SRC   += src/web_platform.c
 CFLAGS_X  := -DIO_WEB -sASYNCIFY
-WEB_SHELL := src/web_shell.html
-LDFLAGS_X := -sASYNCIFY --preload-file assets@/assets --shell-file $(WEB_SHELL)
+WEB_SHELL := assets/web_shell.html
+LDFLAGS_X := -sASYNCIFY --preload-file assets@/assets --exclude-file $(WEB_SHELL) \
+            --shell-file $(WEB_SHELL)
 EXE       := .html
 else ifneq (,$(findstring mingw,$(CC)))
 LIB_SRC   += src/win_platform.c
