@@ -203,4 +203,13 @@ Layout ui_layout_commands(Ui *ui, const char *desc, uint32_t desc_len, const cha
 int32_t ui_draw_slots(Ui *ui, IoCtx *c, const TextFont *f, int32_t x, int32_t y,
                       const Sym *slot, size_t filled);
 
+/* The log, read the way the drawing and the walkthrough both read it. Shared rather
+ * than moved into game.c because it is about how the answer is laid out on screen, and
+ * the drawing is the only place that decides. */
+size_t ui_last_log_index(const Game *g, int want_room);
+size_t ui_block_end(const Game *g, size_t from);
+size_t ui_block_text(const Game *g, size_t from, size_t to, char *out, size_t cap);
+size_t ui_utf8_floor(const char *t, size_t len, size_t upto);
+void ui_draw(Ui *ui);
+
 #endif

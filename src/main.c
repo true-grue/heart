@@ -97,63 +97,12 @@ static char *slurp(const char *path, size_t *len) {
  * numbers, the comparison was therefore true almost every frame, and the result was a
  * flash of highlight on entering a room that lasted until the next redraw. The name is
  * the only thing that stops it being made again. */
-static size_t last_log_index(const Game *g, int want_room) {
-    size_t i;
-
-    for (i = g->log_count; i > 0; i--) {
-        if (g->log_headed[i - 1] && ((g->log_head[i - 1] != NULL) == want_room)) {
-            return i - 1;
-        }
-    }
-    return (size_t)-1;
-}
 
 /* Where the block that starts at `from` ends: the next heading, or the log end. */
-static size_t block_end(const Game *g, size_t from) {
-    size_t i;
-
-    for (i = from + 1; i < g->log_count; i++) {
-        if (g->log_headed[i]) {
-            return i;
-        }
-    }
-    return g->log_count;
-}
 
 /* The lines of one block joined into a single paragraph. A room description is
  * written as several says and must not read as several paragraphs, so the lines
  * are glued with a space and wrapped as one piece of prose. */
-static size_t block_text(const Game *g, size_t from, size_t to, char *out, size_t cap) {
-    size_t k;
-    size_t n = 0;
-
-    for (k = from; k < to && n + 1 < cap; k++) {
-        uint32_t i = 0;
-
-        if (g->log_len[k] == 0) {
-            continue;
-        }
-        if (n > 0 && n + 1 < cap) {
-            out[n++] = ' ';
-        }
-        while (i < g->log_len[k] && n + 1 < cap) {
-            uint32_t cp;
-            size_t step = utf8_decode((const uint8_t *)g->log_text[k] + i,
-                                      (size_t)(g->log_len[k] - i), &cp);
-            if (step == 0) {
-                step = 1;
-            }
-            if (step > cap - 1 - n) {
-                break;
-            }
-            memcpy(out + n, g->log_text[k] + i, step);
-            n += step;
-            i += (uint32_t)step;
-        }
-    }
-    out[n] = '\0';
-    return n;
-}
 
 /* Splits off the first visual row that fits in max_w and reports where the next
  * one starts. The break goes after the last space that fits, so words stay whole;
@@ -161,13 +110,6 @@ static size_t block_text(const Game *g, size_t from, size_t to, char *out, size_
 
 /* Largest codepoint boundary at or before `upto`, so a partially typed answer
  * never ends inside a letter. */
-static size_t utf8_floor(const char *t, size_t len, size_t upto) {
-    while (upto > 0 && upto < len &&
-           ((unsigned char)t[upto] & 0xC0u) == 0x80u) {
-        upto--;
-    }
-    return upto;
-}
 
 /* ------------------------------------------------------------ drawing -- */
 
@@ -287,249 +229,6 @@ static int do_load(Ui *ui, Game *g, const GameDef *def) {
     return 1;
 }
 
-static void ui_draw(Ui *ui) {
-    IoCtx *c = ui->ctx;
-    const TextFont *f = ui->font;
-    const Game *g = ui->game;
-    char para[PARA_MAX];
-    char dpara[PARA_MAX];
-    char dpara2[PARA_MAX];
-    size_t room = last_log_index(g, 1);
-    size_t cmd = last_log_index(g, 0);
-    size_t answer_n;
-    size_t desc_n;
-    size_t i;
-    Layout L;
-
-    ui->hit_n = 0;
-
-    /* Before anything is drawn, not after: the description reads the marks, so a reset
-     * that lands below it leaves the frame that enters a room drawn in the previous
-     * room's colours. The room then looks briefly wrong and corrects itself on the next
-     * redraw, which reads as a flicker on a mouse move. */
-    /* g->room is a room symbol and last_log_index returns a log index. They are never
-     * compared to each other; see the note on last_log_index for what happened last time
-     * they were. */
-    if ((size_t)g->room != ui->last_room) {
-        ui->last_room = (size_t)g->room;
-        ui->dscroll = 0.0;
-        ui->dscroll_want = 0.0;
-    }
-    /* The room on screen always has its baseline recorded, before anything can act in
-     * it. Invariant, not a reaction: whatever happened to the previous room, whatever
-     * the command did on the way here, the fragments currently visible are the ones
-     * that were already there and nothing may light up on account of arriving. */
-    if (ui->frag_line_n == 0) {
-        ui_note_room_fragments(ui, g);
-    }
-
-    io_fill_rect(c, (IoRect){ 0, 0, GAME_W, GAME_H }, C_BG);
-
-    /* Bands first, contents after. The geometry is decided from the text this frame is
-     * about to show, and every background goes down before anything is drawn into it. */
-    answer_n = (cmd != (size_t)-1)
-                   ? block_text(g, cmd + 1, block_end(g, cmd), para, sizeof para)
-                   : 0;
-    desc_n = game_room_text(g, dpara, sizeof dpara);
-    L = ui_compute_layout(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
-
-    ui_band(c, L.ctrl_y, L.ctrl_h, C_BAND);
-    ui_band(c, L.name_y, L.name_h, C_BAND);
-    ui_band(c, L.desc_y, L.desc_h, C_FIELD);
-    ui_band(c, L.cmd_y, L.cmd_h, C_BAND);
-    ui_band(c, L.items_y, L.items_h, C_BAND);
-    ui_band(c, L.resp_y, L.resp_h, C_FIELD);
-
-    /* control ui_band: the game on the left, the way out on the right */
-    ui_text_at(c, f, MARGIN_X, L.ctrl_y + (L.ctrl_h - f->line_height) / 2, ui->game_title,
-            (uint32_t)strlen(ui->game_title), C_DIM);
-    {
-        static const char new_label[] = "Новая игра";
-        static const char save_label[] = "Сохранить";
-        static const char load_label[] = "Загрузить";
-        static const char exit_label[] = "Выход";
-        int32_t right = GAME_W - MARGIN_X;
-
-        /* Laid out right to left, so the way out stays in the corner a hand goes
-         * to without looking. */
-        right = ui_draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, exit_label,
-                            sizeof exit_label, C_QUIT, HIT_EXIT);
-        right = ui_draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, load_label,
-                            sizeof load_label, C_CHIP, HIT_LOAD);
-        right = ui_draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, save_label,
-                            sizeof save_label, C_CHIP, HIT_SAVE);
-        (void)ui_draw_button(c, ui, f, right, L.ctrl_y + 2, BTN_H, new_label,
-                          sizeof new_label, C_CHIP, HIT_NEW);
-    }
-
-    /* name ui_band */
-    if (room != (size_t)-1) {
-        ui_text_at(c, f, MARGIN_X, L.name_y + (L.name_h - f->line_height) / 2, g->log_head[room],
-                g->log_len[room], C_NAME);
-    }
-
-    /* Description ui_band: one paragraph, no break where the script has one. It is built
-     * from the room's fragments against the flags as they are now, not read out of the
-     * log, so a fragment that has appeared or vanished after a command is on screen at
-     * once. Reading the log left the player looking at the room as it was on entry. */
-    io_push_clip(c, (IoRect){ 0, L.desc_y, GAME_W, L.desc_h });
-    if (desc_n > 0) {
-        Span hl[FRAG_MAX];
-        FragSpan sp[FRAG_MAX];
-        size_t hl_n = 0;
-        size_t nsp = 0;
-        size_t si;
-        size_t k;
-
-        /* Which fragments arrived with the last command, as offsets into the text this
-         * frame draws. Rebuilt per frame, because the offsets move whenever the
-         * description is assembled differently. */
-        if (game_room_text_spans(g, dpara2, sizeof dpara2, sp, FRAG_MAX, &nsp) ==
-            desc_n) {
-            for (si = 0; si < nsp; si++) {
-                for (k = 0; k < ui->frag_hot_n; k++) {
-                    if (ui->frag_hot[k] == sp[si].line) {
-                        hl[hl_n].off = sp[si].off;
-                        hl[hl_n].len = sp[si].len;
-                        hl_n++;
-                        break;
-                    }
-                }
-            }
-        }
-        int fit = (L.desc_h - 2 * PAD) / f->line_height;
-        int32_t ex = MARGIN_X;
-        int32_t ey = L.desc_y + PAD;
-
-        if (fit < 1) {
-            fit = 1;
-        }
-        ui->dscroll_want = ui_text_tail(c, f, L.desc_y + PAD, fit, GAME_W - 2 * MARGIN_X,
-                                     dpara, (uint32_t)desc_n, (uint32_t)desc_n, C_INK,
-                                     ui->dscroll, hl, hl_n, C_HOT, &ex, &ey);
-        if (!ui->animate) {
-            /* The walkthrough must land on the frame the player would have seen. */
-            ui->dscroll = ui->dscroll_want;
-        }
-    }
-    io_pop_clip(c);
-
-    if (L.overfull) {
-        ui->overfull++;
-    }
-    /* A new room means a new description, and the scroll starts at its head again.
-     * Keyed on the room rather than on the click, so loading and starting a new game
-     * reset it too. */
-
-    /* command ui_band */
-    (void)ui_layout_commands(ui, dpara, (uint32_t)desc_n, para, (uint32_t)answer_n);
-
-    /* The strip of what the player is carrying. A flag whose name starts with an
-     * underscore is state rather than a thing, and the underscore is the only marker
-     * the format has, so it is the whole test.
-     *
-     * It used to hide the overflow behind a "+N" chip, and that was the wrong choice:
-     * the player was told how many things he was not looking at, which is the one piece
-     * of information worth the least, and never told which. Now everything stays on the
-     * strip and the names are shortened instead, longest first, with a dot for the mark.
-     * A name he can read is worth more than a name he can read in full. */
-    {
-        int32_t x = MARGIN_X;
-        char label[ITEM_MAX][LABEL_MAX];
-        uint32_t len[ITEM_MAX];
-        size_t count = 0;
-        size_t k;
-
-        for (i = 0; i < game_flag_count(g) && count < ITEM_MAX; i++) {
-            size_t l2 = 0;
-            const char *name;
-
-            if (!game_flag_on(g, i)) {
-                continue;
-            }
-            name = game_flag_name(g, i, &l2);
-            if (l2 == 0 || name[0] == '_') {
-                continue;
-            }
-            for (k = 0; k < l2 && k < LABEL_MAX - 2; k++) {
-                label[count][k] = (name[k] == '_') ? ' ' : name[k];
-            }
-            label[count][k] = '\0';
-            len[count] = (uint32_t)k;
-            count++;
-        }
-
-        items_fit(f, label, len, count);
-
-        for (k = 0; k < count; k++) {
-            int32_t w = (int32_t)text_width(f, label[k], len[k]) + 2 * CHIP_PAD_X;
-
-            io_fill_rect(c, (IoRect){ x, L.items_y + 3, w, L.items_h - 6 }, C_CHIP);
-            ui_text_at(c, f, x + CHIP_PAD_X,
-                    L.items_y + 3 + (L.items_h - 6 - f->line_height) / 2,
-                    label[k], len[k], C_DIM);
-            x += w + CHIP_GAP;
-        }
-        if (count == 0) {
-            /* Nothing carried. Not "nothing drawn": a strip whose names were all
-             * shortened still has something on it. */
-            static const char empty[] = "пусто";
-
-            ui_text_at(c, f, x, L.items_y + (L.items_h - f->line_height) / 2, empty,
-                    (uint32_t)(sizeof empty - 1), C_DIM);
-        }
-    }
-
-    /* answer ui_band, typed out */
-    io_push_clip(c, (IoRect){ 0, L.resp_y, GAME_W, L.resp_h });
-    if (cmd != (size_t)-1) {
-        size_t n = answer_n;
-        size_t vis = (ui->typed >= (double)n) ? n : utf8_floor(para, n, (size_t)ui->typed);
-
-        int fit = (L.resp_h - 2 * PAD) / f->line_height;
-        int32_t end_x = MARGIN_X;
-        int32_t end_y = L.resp_y + PAD;
-        int32_t top = L.resp_y + PAD;
-
-        /* Bottom anchored: the answer belongs next to the commands it produced, and the
-         * slack reads as a gap under the description rather than a hole above them. */
-        {
-            int32_t rows = ui_rows_of(f, para, (uint32_t)n, GAME_W - 2 * MARGIN_X);
-
-            if (rows < fit) {
-                top = L.resp_y + L.resp_h - PAD - rows * f->line_height;
-                if (top < L.resp_y + PAD) {
-                    top = L.resp_y + PAD;
-                }
-                fit = rows;
-            }
-        }
-
-        ui->scroll_want = ui_text_tail(c, f, top, fit, GAME_W - 2 * MARGIN_X, para,
-                                    (uint32_t)n, (uint32_t)vis, C_INK, ui->scroll, NULL, 0,
-                                    C_INK, &end_x, &end_y);
-        if (!ui->animate) {
-            /* The walkthrough has to land on the tail of every answer, or the frame it
-             * writes is not the frame the player would have seen. */
-            ui->scroll = ui->scroll_want;
-        }
-        if (vis < n) {
-            /* The caret goes directly after the last letter that arrived, which is
-             * what makes the text look like it is being written rather than
-             * revealed. It moves with the text instead of sitting at a fixed spot. */
-            io_fill_rect(c, (IoRect){ end_x + 2, end_y - f->ascent + 3, 7,
-                                      f->ascent - 3 }, C_CARET);
-        }
-    } else {
-        /* Nothing about a verb and an object: a command is however many words the script
-         * gave it, from one to four, and the hint that named two slots was wrong for
-         * every command that is not two words long. */
-        static const char hint[] = "Выберите действие.";
-        ui_text_top(c, f, L.resp_y + PAD, GAME_W - 2 * MARGIN_X, hint,
-                 (uint32_t)(sizeof hint - 1), C_DIM);
-    }
-    io_pop_clip(c);
-}
 
 /* ------------------------------------------------------- walkthrough -- */
 
@@ -1378,9 +1077,9 @@ int main(int argc, char **argv) {
                  * is no keyboard to press, and waiting out a long answer is the one
                  * thing a finger should not have to do. */
                 char probe[PARA_MAX];
-                size_t here = last_log_index(&game, 0);
+                size_t here = ui_last_log_index(&game, 0);
                 size_t n = (here != (size_t)-1)
-                         ? block_text(&game, here + 1, block_end(&game, here), probe,
+                         ? ui_block_text(&game, here + 1, ui_block_end(&game, here), probe,
                                       sizeof probe)
                          : 0;
                 if (n > 0 && ui.typed < (double)n) {
@@ -1457,10 +1156,10 @@ int main(int argc, char **argv) {
             ui.scroll_want = 0.0;
             ui.done = 0;
         }
-        cmd = last_log_index(&game, 0);
+        cmd = ui_last_log_index(&game, 0);
         if (cmd != (size_t)-1) {
             char probe[PARA_MAX];
-            answer = block_text(&game, cmd + 1, block_end(&game, cmd), probe,
+            answer = ui_block_text(&game, cmd + 1, ui_block_end(&game, cmd), probe,
                                 sizeof probe);
         }
         if (ui.animate) {
