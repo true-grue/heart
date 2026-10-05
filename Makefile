@@ -12,7 +12,7 @@ DBG     := -O0 -g
 SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer
 ANALYZE := -fanalyzer
 
-INC := -Isrc
+INC := -Isrc -Itests
 
 BUILD := build
 OBJ   := $(BUILD)/obj
@@ -76,12 +76,18 @@ else
 CFLAGS_X  := -DIO_TEST
 endif
 
+# ui.h was missing until now, and it is the header with the layout structs the game
+# binary reads: without it a redefinition of a band reached nobody and the link succeeded
+# against a struct the caller no longer agreed with. walk.h is included by src/main.c and
+# lives with the rest of the walkthrough in tests/.
 HDRS := src/arena.h \
         src/utf8.h \
         src/game.h \
         src/io.h \
         src/dsl.h \
-        src/font.h
+        src/font.h \
+        src/ui.h \
+        tests/walk.h
 
 # The web shell is built into the page, so editing it has to rebuild the page: a stale
 # index with a new canvas script is the same failure as a stale header with a new struct.
@@ -98,7 +104,7 @@ EXE      ?=
 GAME_BINS := $(addprefix $(BUILD)/,$(addsuffix $(EXE),$(GAMES)))
 
 STRESS_SRC := tests/stress.c
-QUEST_SRC := src/main.c src/walk.c
+QUEST_SRC := src/main.c tests/walk.c
 STRESS   := $(BUILD)/stress
 QUEST    := $(BUILD)/quest$(EXE)
 TOOL_SRC := tools/test.c
