@@ -81,7 +81,7 @@ GAMES     := tutorial field heart
 GAME_BINS := $(addprefix $(BUILD)/,$(GAMES))
 
 STRESS_SRC := tests/stress.c
-QUEST_SRC := src/main.c
+QUEST_SRC := src/main.c src/walk.c
 STRESS   := $(BUILD)/stress
 QUEST    := $(BUILD)/quest
 TOOL_SRC := tools/test.c

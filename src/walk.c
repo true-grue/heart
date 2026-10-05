@@ -2,6 +2,7 @@
 #include "ui.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------- walkthrough -- */
@@ -30,7 +31,11 @@ typedef struct Node {
     Sym words[RULE_MAX_WORDS];
 } Node;
 
-static Node g_nodes[WALK_MAX_SEEN];
+/* On the heap, not in the image. It was a static array of 8192 entries, and every entry
+ * carries a whole game state, so the program carried fifty five megabytes of queue in
+ * its bss for the entire run — including all the runs that never walk anything, which is
+ * all of them except one. */
+static Node *g_nodes;
 static size_t g_nodes_n;
 static size_t g_head;
 static int g_win;
@@ -184,6 +189,7 @@ static void keep_worst(Worst *w, int32_t v, const char *what) {
     }
 }
 
+/* How many lines a paragraph takes at this width: the same greedy wrap as the drawing. */
 
 /* The widest a row of word chips can get, given the words that could appear in it. */
 static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
@@ -204,12 +210,13 @@ static int32_t chips_width(const TextFont *f, const Script *s, const Sym *syms,
     return (n > 0 || trailing != NULL) ? x - CHIP_GAP : 0;
 }
 
-int walk_layout_audit(Ui *ui, Game *g, const Script *s) {
+int walk_layout_audit(Ui *ui, Game *g, const Script *s,
+                       const char *const *titles, size_t titles_n) {
     const TextFont *f = ui->font;
     /* The floor, not a sample: one row of chips and the shortest answer the engine
      * will settle for, with nothing spare. Asking the layout instead means asking
-     * about an empty description, which sizes the band to nothing and then reports
-     * that every room overflows a band that in fact scrolls. */
+     * about an empty description, which sizes the ui_band to nothing and then reports
+     * that every room overflows a ui_band that in fact scrolls. */
     int32_t cmd_min_h = CMD_PAD + TILE_H + CMD_PAD + CHIP_H + CMD_PAD;
     int32_t desc_floor = GAME_H - CTRL_H - NAME_H - ITEMS_H - cmd_min_h - RESP_MIN_H;
     int32_t fit_desc = (desc_floor - 2 * PAD) / f->line_height;
@@ -247,13 +254,15 @@ int walk_layout_audit(Ui *ui, Game *g, const Script *s) {
                   2 * CHIP_PAD_X + CHIP_GAP;
         }
         bw -= CHIP_GAP;
-        /* The four buttons plus this game's title. It used to take the widest title
-         * across every shipped game, which meant reaching into the application's
-         * registry of games from a block that only reports on one of them. */
-        keep_worst(&w_ctrl,
-                   bw + MARGIN_X + (int32_t)text_width(f, ui->game_title,
-                                                       (uint32_t)strlen(ui->game_title)),
-                   ui->game_title);
+        /* The widest title among the games that ship. Passed in rather than reached
+         * for: the registry belongs to the application, and a file that searches the
+         * state graph has no business knowing which games exist. */
+        for (i = 0; i < titles_n; i++) {
+            int32_t tw = (int32_t)text_width(f, titles[i],
+                                             (uint32_t)strlen(titles[i]));
+
+            keep_worst(&w_ctrl, bw + MARGIN_X + tw, titles[i]);
+        }
     }
 
     for (i = 0; i < s->room_count; i++) {
@@ -267,8 +276,8 @@ int walk_layout_audit(Ui *ui, Game *g, const Script *s) {
         keep_worst(&w_name, (int32_t)text_width(f, r->title, r->title_len), what);
 
         /* Every room, not just the rooms the winning path walks through. The
-         * description is the one band that must never lose text, so it is checked
-         * against the smallest band the engine can be forced to give it: one row of
+         * description is the one ui_band that must never lose text, so it is checked
+         * against the smallest ui_band the engine can be forced to give it: one row of
          * chips and the minimum answer. If it fits there, it fits anywhere. */
         {
             char room_para[PARA_MAX];
@@ -411,7 +420,7 @@ int walk_layout_audit(Ui *ui, Game *g, const Script *s) {
         printf("\nописание влезает в каждой из %d комнат\n", (int)s->room_count);
     }
         /* Width is no longer pass or fail. A row of chips too wide to fit wraps, and
-         * the band grows to hold it; the item strip does not wrap and says how many
+         * the ui_band grows to hold it; the item strip does not wrap and says how many
          * things it is hiding. Each is reported on its own terms. */
         if (w_slots.value > usable - CHIP_ROW_RESERVE ||
             w_pick.value > usable - CHIP_ROW_RESERVE) {
@@ -451,6 +460,11 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
     int step;
     int steps = 0;
 
+    g_nodes = malloc(WALK_MAX_SEEN * sizeof *g_nodes);
+    if (g_nodes == NULL) {
+        fprintf(stderr, "не хватило памяти на очередь обхода\n");
+        return 1;
+    }
     g_nodes_n = 0;
     g_head = 0;
     g_win = -1;
@@ -466,7 +480,21 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
         g_head++;
     }
     if (g_win < 0) {
-        fprintf(stderr, "этим скриптом нельзя выиграть\n");
+        /* Two different facts, and they must not be reported as one. Running out of room
+         * is not the same as there being nothing to find, and saying "cannot win" after
+         * simply giving up is a confident falsehood: it is what made a grown script look
+         * broken when the only thing that had happened was that the search got slower
+         * than the box it ran in. */
+        if (g_nodes_n >= WALK_MAX_SEEN) {
+            fprintf(stderr, "победа не найдена: обход дошёл до предела в %zu состояний. "
+                            "Это не значит, что её нет — нужен больший предел\n",
+                    (size_t)WALK_MAX_SEEN);
+        } else {
+            fprintf(stderr, "этим скриптом нельзя выиграть: перебраны все %zu состояний\n",
+                    g_nodes_n);
+        }
+        free(g_nodes);
+        g_nodes = NULL;
         return 3;
     }
 
@@ -480,8 +508,15 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
         }
         path[0] = '\0';
         {
-            int idx[WALK_MAX_SEEN];
+            int *idx = malloc(WALK_MAX_SEEN * sizeof *idx);
             int m = 0;
+
+            if (idx == NULL) {
+                fprintf(stderr, "не хватило памяти на путь\n");
+                free(g_nodes);
+                g_nodes = NULL;
+                return 1;
+            }
 
             for (n = g_win; n > 0; n = g_nodes[n].parent) {
                 idx[m++] = n;
@@ -500,6 +535,7 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
                              (k ? " " : ""), (int)wl, w);
                 }
             }
+            free(idx);
         }
         printf("прохождение (%d шагов):\n  %s\n", steps, path);
         step = steps;
@@ -541,6 +577,8 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
             ui_mark_new_fragments(ui, g);
         }
     }
+    free(g_nodes);
+    g_nodes = NULL;
     printf("кадров записано: %d\n", steps + 2);
     if (ui->overfull > 0) {
         printf("кадров не влезло в 480: %d\n", ui->overfull);
