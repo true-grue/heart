@@ -1318,15 +1318,20 @@ static void test_io_pointer_agrees_with_scaling(void) {
     /* A square window forces letterbox bars, so the canvas no longer starts at
      * the window origin and the mapping is not a plain division. */
     io_set_view(&ctx, 20, 20);
-    /* Bars top and bottom: the canvas starts two pixels down and is fifteen tall, so
-     * the top bar maps to negative canvas and the bottom bar past the end. */
+    /* The scale is a whole number, so 16x12 fits in 20x20 only as one, and it is
+     * centred: bars appear on all four sides rather than top and bottom alone.
+     * Corners of the window must therefore land outside the canvas on both axes,
+     * and the far corner past the end of it. */
     {
         int32_t vx = -1;
         int32_t vy = -1;
 
         io_to_virtual(&ctx, 0, 0, &vx, &vy);
-        CHECK_INT(vx, 0);
+        CHECK(vx < 0);
         CHECK(vy < 0);
+        io_to_virtual(&ctx, 19, 19, &vx, &vy);
+        CHECK(vx >= 16);
+        CHECK(vy >= 12);
         io_to_virtual(&ctx, 0, 19, &vx, &vy);
         CHECK(vy >= 12);
     }
@@ -1441,6 +1446,34 @@ static void test_io_event_ring_counts_overflow(void) {
     }
     /* the loss is counted rather than silent */
     CHECK_INT(io_dropped_events(&ctx), 10);
+}
+
+/* The scale must be a whole number even when the window is not a multiple of the
+ * canvas. 30x20 fits a 16x12 canvas at 1.25, and at 1.25 every glyph is resampled off
+ * the grid it was baked on and comes out soft — the defect this rule exists to prevent.
+ * The game drops to 1x and leaves bars on both axes instead. */
+static void test_io_scale_is_whole_number(void) {
+    IoCtx ctx;
+    uint32_t out[30 * 20];
+    int32_t x, y;
+
+    fb_reset(&ctx); /* 16 x 12 */
+    for (y = 0; y < ctx.h; y++) {
+        for (x = 0; x < ctx.w; x++) {
+            ctx.pixels[(size_t)y * ctx.w + x] = 0x00FF00u;
+        }
+    }
+    memset(out, 0, sizeof out);
+    io_scale_canvas(&ctx, out, 30, 20);
+
+    /* One to one, centred: the picture sits at (7,4)..(22,15). A fractional fit would
+     * have filled the full height at x=2, so both the size and the offset are checked. */
+    CHECK_INT(out[4 * 30 + 7], 0x00FF00u);
+    CHECK_INT(out[15 * 30 + 22], 0x00FF00u);
+    CHECK_INT(out[4 * 30 + 6], 0);   /* left bar */
+    CHECK_INT(out[4 * 30 + 23], 0);  /* right bar */
+    CHECK_INT(out[3 * 30 + 7], 0);   /* top bar */
+    CHECK_INT(out[16 * 30 + 7], 0);  /* bottom bar */
 }
 
 static void test_io_scale_preserves_aspect(void) {
@@ -2149,6 +2182,7 @@ const test_case test_cases[] = {
     TEST_CASE(test_io_drag_origin_is_kept),
     TEST_CASE(test_io_event_ring_counts_overflow),
     TEST_CASE(test_io_scale_preserves_aspect),
+    TEST_CASE(test_io_scale_is_whole_number),
     TEST_CASE(test_io_view_reports_window_size),
     TEST_CASE(test_io_init_validates),
     TEST_CASE(test_io_rect_fills_exact_pixels),

@@ -68,15 +68,27 @@ void io_pop_clip(IoCtx *ctx) {
 static IoRect letterbox(int32_t dst_w, int32_t dst_h, int32_t cw, int32_t ch) {
     IoRect r;
     int32_t vw, vh;
+    int32_t k;
 
-    if ((int64_t)dst_w * ch > (int64_t)dst_h * cw) {
-        /* The window is relatively wider, so the height binds. */
-        vh = dst_h;
-        vw = (int32_t)(((int64_t)dst_h * cw) / ch);
-    } else {
-        vw = dst_w;
-        vh = (int32_t)(((int64_t)dst_w * ch) / cw);
+    /* Whole numbers only, and the scale is the largest one that still fits. A
+     * fractional scale resamples every glyph, and the font is a raster: at 1.6 a
+     * vertical stroke lands between two pixel columns and the text comes out soft
+     * on every platform, not only here. Dropping to the next whole number trades a
+     * band of unused window for a font that stays on its grid.
+     *
+     * The same integer drives pointer conversion below, so a tap still lands on the
+     * pixel it was drawn at. */
+    k = dst_w / cw;
+    if (dst_h / ch < k) {
+        k = dst_h / ch;
     }
+    if (k < 1) {
+        /* The window is smaller than the canvas. One to one is the only scale that
+         * keeps the raster intact, and the guards below shrink the rectangle to fit. */
+        k = 1;
+    }
+    vw = cw * k;
+    vh = ch * k;
     if (vw < 1) {
         vw = 1;
     }
