@@ -39,6 +39,32 @@ static Node *g_nodes;
 static size_t g_nodes_n;
 static size_t g_head;
 static int g_win;
+
+/* The queue is also a set, and the set has to be reached by key. Without it the only
+ * way to ask whether a state is already in the graph is to walk every state in it, so
+ * a lookup costs the size of the search — heart spent 0.4 s inside that loop before
+ * reaching the limit. Open addressing, one slot per entry twice over: the table is
+ * sized once for the queue it serves and never grows. */
+#define WALK_SLOT_N 16384u /* power of two, twice WALK_MAX_SEEN */
+static int32_t *g_slot;    /* index into g_nodes, or -1 for an empty slot */
+
+/* FNV-1a over exactly what same_state compares: room, finished and the first
+ * flag_count flags. log_count and won are absent in both — the log is output rather
+ * than state, and a state that has already won never enters the graph. The hash only
+ * has to spread the keys; same_state decides identity, so a collision costs a probe
+ * and nothing else. */
+static uint64_t state_hash(const GameState *st) {
+    uint64_t h = 1469598103934665603ULL;
+    size_t i;
+
+    h = (h ^ (uint64_t)st->room) * 1099511628211ULL;
+    h = (h ^ (uint64_t)st->finished) * 1099511628211ULL;
+    for (i = 0; i < st->flag_count; i++) {
+        h = (h ^ (uint64_t)st->flag_present[i]) * 1099511628211ULL;
+    }
+    return h;
+}
+
 static int same_state(const GameState *a, const GameState *b) {
     size_t i;
 
@@ -69,17 +95,38 @@ static int node_at_depth(int win, int depth) {
 }
 
 static int already_seen(const GameState *st) {
-    size_t i;
+    size_t i = (size_t)state_hash(st) & (WALK_SLOT_N - 1u);
 
     /* The whole queue, not just the expanded part. A state is room plus flags and that
      * is the whole of what the future depends on, so a second route to it cannot offer
      * anything the first did not. */
-    for (i = 0; i < g_nodes_n; i++) {
-        if (same_state(&g_nodes[i].st, st)) {
+    while (g_slot[i] >= 0) {
+        if (same_state(&g_nodes[g_slot[i]].st, st)) {
             return 1;
         }
+        i = (i + 1u) & (WALK_SLOT_N - 1u);
     }
     return 0;
+}
+
+/* Puts a state where the lookup above stopped: nothing is ever removed, so a key's
+ * probe sequence never changes underneath it. The winning state is not remembered —
+ * it is queued without its `st` and the search ends on that same turn, so nothing
+ * would ever read it back. */
+static void remember(size_t idx) {
+    size_t i = (size_t)state_hash(&g_nodes[idx].st) & (WALK_SLOT_N - 1u);
+
+    while (g_slot[i] >= 0) {
+        i = (i + 1u) & (WALK_SLOT_N - 1u);
+    }
+    g_slot[i] = (int32_t)idx;
+}
+
+static void nodes_free(void) {
+    free(g_slot);
+    g_slot = NULL;
+    free(g_nodes);
+    g_nodes = NULL;
 }
 
 /* Enumerates the commands available from a state, a word at a time, the same way the
@@ -139,6 +186,7 @@ static void try_words(Game *g, const GameState *base, int parent, const Sym *pre
             g_nodes[g_nodes_n].parent = parent;
             g_nodes[g_nodes_n].st = after;
             g_nodes_n++;
+            remember(g_nodes_n - 1);
         }
     }
 }
@@ -461,9 +509,17 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
     int steps = 0;
 
     g_nodes = malloc(WALK_MAX_SEEN * sizeof *g_nodes);
-    if (g_nodes == NULL) {
+    g_slot = malloc(WALK_SLOT_N * sizeof *g_slot);
+    if (g_nodes == NULL || g_slot == NULL) {
         fprintf(stderr, "не хватило памяти на очередь обхода\n");
+        free(g_nodes);
+        free(g_slot);
+        g_nodes = NULL;
+        g_slot = NULL;
         return 1;
+    }
+    for (step = 0; step < (int)WALK_SLOT_N; step++) {
+        g_slot[step] = -1;
     }
     g_nodes_n = 0;
     g_head = 0;
@@ -473,6 +529,7 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
     g_nodes[0].parent = -1;
     g_nodes[0].word_len = 0;
     g_nodes_n = 1;
+    remember(0);
 
     while (g_head < g_nodes_n && g_win < 0) {
         game_restore(g, &g_nodes[g_head].st);
@@ -493,8 +550,7 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
             fprintf(stderr, "этим скриптом нельзя выиграть: перебраны все %lu состояний\n",
                     (unsigned long)g_nodes_n);
         }
-        free(g_nodes);
-        g_nodes = NULL;
+        nodes_free();
         return 3;
     }
 
@@ -513,8 +569,7 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
 
             if (idx == NULL) {
                 fprintf(stderr, "не хватило памяти на путь\n");
-                free(g_nodes);
-                g_nodes = NULL;
+                nodes_free();
                 return 1;
             }
 
@@ -577,8 +632,7 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
             ui_mark_new_fragments(ui, g);
         }
     }
-    free(g_nodes);
-    g_nodes = NULL;
+    nodes_free();
     printf("кадров записано: %d\n", steps + 2);
     if (ui->overfull > 0) {
         printf("кадров не влезло в 480: %d\n", ui->overfull);
