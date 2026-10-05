@@ -147,4 +147,8 @@ int32_t ui_chip_w(const TextFont *f, const char *label, uint32_t len);
 int32_t ui_rows_of(const TextFont *f, const char *t, uint32_t len, int32_t width);
 void ui_mark_new_fragments(Ui *ui, const Game *g);
 
+/* Shortens carried item names until the row fits. Exported so the tests can reach it:
+ * inside the drawing there is no way to. */
+void items_fit(const TextFont *f, char label[][LABEL_MAX], uint32_t *len, size_t n);
+
 #endif

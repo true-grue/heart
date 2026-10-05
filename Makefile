@@ -27,7 +27,8 @@ LIB_SRC  := src/arena.c \
             src/game.c \
             src/io.c \
             src/test_platform.c \
-            src/font.c
+            src/font.c \
+            src/ui.c
 
 # The X11 backend is the only part outside the engine that links a system library.
 # Windows and Web backends will use their own platform interfaces instead.

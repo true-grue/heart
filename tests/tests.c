@@ -4,6 +4,7 @@
 #include "utf8.h"
 #include "io.h"
 #include "font.h"
+#include "ui.h"
 #include "dsl.h"
 #include "game.h"
 
@@ -1400,6 +1401,7 @@ static void test_io_integer_scale_is_exact(void) {
     }
 }
 
+
 static void test_io_drag_origin_is_kept(void) {
     IoCtx ctx;
     IoEvent in;
@@ -1730,6 +1732,7 @@ static TextFont load_font(Arena *a, int32_t px) {
     CHECK(text_font_load(a, &f, text, len, px) == TEXT_OK);
     return f;
 }
+
 
 static void test_text_font_loads(void) {
     Arena a;
