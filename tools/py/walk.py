@@ -18,6 +18,8 @@ h(s) — расстояние до финала в графе комнат, по
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from heapq import heappop, heappush
 
@@ -336,6 +338,41 @@ class World:
                 out.append(i)
         return out
 
+    def holds(self, room, idx, mask):
+        r = room.rules[idx]
+        return (mask & r.pos) == r.pos and not (mask & r.neg)
+
+    def next_words(self, room, mask, prefix):
+        """Слова, которые могут идти после префикса, в порядке исходника комнаты."""
+        pre = tuple(prefix)
+        out = []
+        for i, r in enumerate(room.rules):
+            if len(r.key) <= len(pre) or not self.holds(room, i, mask):
+                continue
+            if r.key[:len(pre)] != pre:
+                continue
+            word = r.key[len(pre)]
+            if word not in out:
+                out.append(word)
+        return out
+
+    def more_words(self, room, mask, prefix):
+        """Может ли после префикса что-то ещё идти: не значит, что команда завершена."""
+        pre = tuple(prefix)
+        for i, r in enumerate(room.rules):
+            if len(r.key) <= len(pre) or not self.holds(room, i, mask):
+                continue
+            if r.key[:len(pre)] == pre:
+                return True
+        return False
+
+    def rule_at(self, room, mask, words):
+        """Номер правила, которое сработает на этих словах, или -1."""
+        for i, r in enumerate(room.rules):
+            if list(r.key) == list(words) and self.holds(room, i, mask):
+                return i
+        return -1
+
     def executable(self, room, mask):
         """Команды, которые палитра сейчас предлагает: (слова, номер правила)."""
         live = self.live(room, mask)
@@ -459,7 +496,7 @@ def target_specs(w, targets):
     return specs
 
 
-def search(w, greedy_bits, targets, limit):
+def search(w, greedy_bits, targets, limit, collect=None):
     """A* по состояниям. targets — строки концовок, любая из них и есть цель.
 
     Оценка — расстояние до комнаты цели плюс число её условий, которые ещё не
@@ -519,9 +556,20 @@ def search(w, greedy_bits, targets, limit):
             if rule.act in ("end", "win"):
                 if rule.line in targets:
                     nodes.append([room_id, new_mask, idx, key, False])
-                    return nodes, len(nodes) - 1, {
-                        "expanded": expanded, "states": len(g),
-                        "pickups": pickups, "overflow": False}
+                    last = len(nodes) - 1
+                    if collect is None:
+                        return nodes, last, {
+                            "expanded": expanded, "states": len(g),
+                            "pickups": pickups, "overflow": False}
+                    # Collecting every ending in one pass instead of one search each:
+                    # the searches share almost all of their work, and twelve of them in a
+                    # row is eight minutes against one.
+                    if rule.line not in collect:
+                        collect[rule.line] = (nodes, last)
+                        if len(collect) == len(targets):
+                            return nodes, last, {
+                                "expanded": expanded, "states": len(g),
+                                "pickups": pickups, "overflow": False}
                 continue
 
             new_room = rule.arg if rule.act == "go" else room_id
@@ -607,6 +655,10 @@ def main(argv=None):
                     help="строка концовки, к которой идём (можно много раз)")
     ap.add_argument("--endings", action="store_true",
                     help="проверить все концовки скрипта по очереди")
+    ap.add_argument("--all-routes", metavar="FILE",
+                    help="собрать маршрут к каждой концовке за один проход и записать JSON")
+    ap.add_argument("--json", metavar="FILE",
+                    help="записать маршрут к --line в JSON")
     ap.add_argument("--show", action="store_true",
                     help="напечатать маршрут (только с одним --line)")
     ap.add_argument("--no-greedy", action="store_true",
@@ -629,6 +681,27 @@ def main(argv=None):
     else:
         print("жадный подбор: выключен")
 
+    if args.all_routes:
+        items, forbidden = greedy_items(sc)
+        for name in items:
+            greedy_bits |= w.bits[name]
+        targets = {e[0] for e in endings_of(w)}
+        found = {}
+        search(w, greedy_bits, targets, args.limit, collect=found)
+        out = {}
+        for line in sorted(found):
+            nodes, last = found[line]
+            steps = []
+            for st in route(nodes, last):
+                steps.append([st[0], list(st[3])])
+            out[str(line)] = steps
+        with open(args.all_routes, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, ensure_ascii=False, indent=1)
+        missing = sorted(targets - set(found))
+        print("маршрутов: %d из %d%s" % (len(found), len(targets),
+              (", нет: " + ", ".join(str(x) for x in missing)) if missing else ""))
+        return 0 if not missing else 3
+
     if args.endings:
         wanted = [e[0] for e in endings_of(w)]
     elif args.line:
@@ -650,6 +723,7 @@ def main(argv=None):
     longest = None
     last_steps = None
     last_line = None
+    written = {}
     print("%-6s %-5s %-12s %s" % ("строка", "вид", "комната", "вердикт"))
     for line in wanted:
         nodes, final, st = search(w, greedy_bits, {line}, args.limit)
@@ -661,6 +735,8 @@ def main(argv=None):
             steps = route(nodes, final)
             again = replay(w, steps)
             last_steps, last_line = steps, line
+            if args.json:
+                written[str(line)] = [[st[0], list(st[3])] for st in steps]
             if again != line:
                 verdict = "МАРШРУТ НЕ ПОВТОРЯЕТСЯ: %s" % (again,)
             else:
@@ -672,6 +748,15 @@ def main(argv=None):
         print("%-6d %-5s %-12s %s"
               % (line, kind[line], room_of[line], verdict), flush=True)
 
+    if args.json:
+        out = {}
+        if os.path.exists(args.json):
+            with open(args.json, encoding="utf-8") as fh:
+                out = json.load(fh)
+        out.update(written)
+        with open(args.json, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, ensure_ascii=False, indent=1)
+        print("записано маршрутов: %d в %s" % (len(out), args.json))
     print("достигнуто концовок: %d из %d" % (reached, len(wanted)))
     if longest:
         print("самый длинный маршрут: строка %d, %d шагов" % longest)
