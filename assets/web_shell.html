@@ -11,12 +11,12 @@
      pinch and pan the page under a canvas sized in whole multiples makes the scale
      whatever the last gesture left it. The platform sets the same value inline. */
   #canvas { display: block; touch-action: none; margin: 0 auto; }
-  /* The button lives under the canvas and only while there is a bar to live in. A page
-     button on top of the game would sit on Выход, the one control that has to stay
-     reachable. */
+  /* The button lives in the widest bar around the canvas and only while a bar has room
+     for it. A page button on top of the game would sit on Выход, the one control that has
+     to stay reachable, and one placed at a fixed offset from the bottom went off screen
+     the moment the canvas was not where that offset assumed. */
   #full {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 4px;
-    font: 12px/1 sans-serif; color: #bbb; background: #1b1f27;
+    position: fixed; font: 12px/1 sans-serif; color: #bbb; background: #1b1f27;
     border: 1px solid #444; border-radius: 3px; padding: 5px 9px; cursor: pointer;
   }
 </style>
@@ -42,9 +42,18 @@ window.addEventListener("unhandledrejection", function (e) {
   report(r && r.message ? r.message : String(r), "", 0, 0);
 });
 
-/* Fullscreen, in the bar under the canvas and only while that bar exists. iPhone Safari
- * has no element fullscreen at all, so the request is guarded: a phone that cannot do it
- * must not get an error for asking.
+/* Fullscreen, in the widest bar around the canvas: the four strips the canvas leaves
+ * free are measured, the roomiest one that can hold the button takes it, and the button
+ * goes to its middle. Recomputed on every call rather than parked at an offset, because
+ * an offset from the bottom is only right for the layout it was written against and the
+ * canvas is not always there — rotated, in fullscreen, or scaled down to fit.
+ *
+ * When no strip has room the button still has to exist: in fullscreen it is the way out,
+ * so it goes to the corner of the largest strip anyway and is clamped inside the window.
+ * Off screen is the one outcome that leaves the player stuck.
+ *
+ * iPhone Safari has no element fullscreen at all, so the request is guarded: a phone that
+ * cannot do it must not get an error for asking.
  *
  * The document goes fullscreen rather than the canvas, and that is the whole reason the
  * controls stay reachable: a fullscreen canvas is the only thing on screen, so the
@@ -55,10 +64,31 @@ function place() {
   var c = document.getElementById("canvas");
   var page = document.documentElement;
   if (!c) { return; }
+  var W = page.clientWidth, H = page.clientHeight;
   var r = c.getBoundingClientRect();
-  var bar = page.clientHeight - r.bottom;
-  full.hidden = document.fullscreenElement ? false : !(bar >= full.offsetHeight + 8);
-  full.style.bottom = Math.max(4, Math.floor(bar / 2) - full.offsetHeight / 2) + "px";
+  var bw = full.offsetWidth, bh = full.offsetHeight;
+  var L = Math.round(r.left), T = Math.round(r.top);
+  var R = Math.round(r.right), B = Math.round(r.bottom);
+  var bars = [
+    { x: 0, y: 0, w: W, h: T },
+    { x: 0, y: B, w: W, h: H - B },
+    { x: 0, y: 0, w: L, h: H },
+    { x: R, y: 0, w: W - R, h: H }
+  ];
+  var best = null, i, b;
+  for (i = 0; i < bars.length; i++) {
+    b = bars[i];
+    if (b.w < bw + 8 || b.h < bh + 8) { continue; }
+    if (best === null || b.w * b.h > best.w * best.h) { best = b; }
+  }
+  if (best === null) {
+    for (i = 0; i < bars.length; i++) {
+      if (bars[i].w * bars[i].h > (best === null ? -1 : best.w * best.h)) { best = bars[i]; }
+    }
+  }
+  full.hidden = false;
+  full.style.left = Math.max(0, Math.min(W - bw, Math.round(best.x + (best.w - bw) / 2))) + "px";
+  full.style.top = Math.max(0, Math.min(H - bh, Math.round(best.y + (best.h - bh) / 2))) + "px";
 }
 full.onclick = function () {
   var page = document.documentElement;
