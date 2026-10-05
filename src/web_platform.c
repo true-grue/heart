@@ -27,7 +27,7 @@ typedef struct WebState {
     int32_t fixed_w, fixed_h;  /* test key asked for a resolution: browser scales nothing */
     int32_t win_w, win_h;      /* window in CSS pixels, for the letterbox */
     int32_t css_w, css_h;      /* box the canvas is shown in, to notice a change */
-    int have_win;              /* the window size was measured, not guessed */
+    int settle;                /* frames left to keep remeasuring the window */
     double dpr;        /* backing pixels per CSS pixel */
     uint32_t *stage;   /* backing sized, 0xRRGGBB, filled by io_scale_canvas */
     size_t stage_cap;
@@ -75,10 +75,16 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h, int crisp), {
     c.style.position = "absolute";
     c.style.left = Math.max(0, Math.floor((window.innerWidth - css_w) / 2)) + "px";
     c.style.top = Math.max(0, Math.floor((window.innerHeight - css_h) / 2)) + "px";
-    /* touch-action is deliberately not set. Both none and pinch-zoom were tried here and
-     * pinch-zoom is what the browser already does on its own; saying anything at all only
-     * risks taking the two finger zoom away from a player on a phone. */
+    /* none, so the only gestures that reach this game are the game's own. A browser that
+     * may pinch and pan the page underneath a canvas sized in whole multiples turns the
+     * scale into whatever the last gesture left, which is the one thing the integer
+     * multiplier exists to prevent. */
     c.style.display = "block";
+    /* none, so the only gestures that reach this game are the game's own. A browser free
+     * to pinch and pan the page underneath a canvas sized in whole multiples turns the
+     * scale into whatever the last gesture left, which is the one thing the integer
+     * multiplier exists to prevent. */
+    c.style.touchAction = "none";
     var s = document.getElementById("quest_web_css");
     if (!s) {
         s = document.createElement("style");
@@ -258,15 +264,28 @@ static EM_BOOL web_touch_cb(int type, const EmscriptenTouchEvent *ev, void *user
 
 /* The window is the browser window, so a resize is the page becoming a different
  * size. The canvas fills it and the view follows; nothing else hears about it. */
+#define WEB_SETTLE 8      /* frames of remeasuring after the window moves */
+
 static EM_BOOL web_resize_cb(int type, const EmscriptenUiEvent *ev, void *user) {
     (void)type;
     (void)user;
-    if (ev->windowInnerWidth <= 0 || ev->windowInnerHeight <= 0) {
-        return true;
+    if (ev->windowInnerWidth > 0 && ev->windowInnerHeight > 0) {
+        g_web.win_w = (int32_t)ev->windowInnerWidth;
+        g_web.win_h = (int32_t)ev->windowInnerHeight;
     }
-    g_web.win_w = (int32_t)ev->windowInnerWidth;
-    g_web.win_h = (int32_t)ev->windowInnerHeight;
-    g_web.have_win = 1;
+    g_web.settle = WEB_SETTLE;
+    web_resize();
+    return true;
+}
+
+/* A phone turning its screen says which way it is turning and nothing about how big it
+ * will be, so this only starts the remeasuring; the size arrives a frame later. */
+static EM_BOOL web_orientation_cb(int type, const EmscriptenOrientationChangeEvent *ev,
+                                  void *user) {
+    (void)type;
+    (void)ev;
+    (void)user;
+    g_web.settle = WEB_SETTLE;
     web_resize();
     return true;
 }
@@ -291,7 +310,7 @@ static int web_open(void *self, const char *title, int32_t w, int32_t h) {
      * rather than to a window-sized box on a window that is not that big. */
     st->win_w = 0;
     st->win_h = 0;
-    st->have_win = 0;
+    st->settle = WEB_SETTLE;
 
     /* The canvas cannot be sized here: what it is sized from is the virtual canvas, and
      * the only place that is known is the context, which the backend does not get until
@@ -306,6 +325,7 @@ static int web_open(void *self, const char *title, int32_t w, int32_t h) {
     emscripten_set_touchmove_callback(canvas, NULL, 0, web_touch_cb);
     emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, 0,
                                    web_resize_cb);
+    emscripten_set_orientationchange_callback(NULL, 0, web_orientation_cb);
     return 1;
 }
 
@@ -341,26 +361,29 @@ static int web_pump(void *self, IoCtx *ctx) {
     WebState *st = (WebState *)self;
     unsigned i;
 
-    /* The virtual canvas is the one thing needed to size the canvas that only the context
-     * knows, so the first pump is where the canvas gets its size. Doing it here rather
-     * than in open is also what puts io_set_view before the first event is read, which is
-     * what makes a click and a drawn pixel the same place. */
-    if (ctx->w != st->vw || ctx->h != st->vh) {
-        int ww, wh;
+    /* The window is remeasured for a few frames after every resize and after every
+     * orientation change, because neither reports a size that can be used straight away:
+     * a phone turning its screen announces the size it is leaving, and nothing fires a
+     * second resize to say the new one. The canvas was therefore sized for the old
+     * orientation and hung off the screen. Re-reading settles it within a frame or two,
+     * and the counter stops the measuring rather than leaving it running forever. */
+    if (st->settle > 0) {
+        int ww = web_window_w();
+        int wh = web_window_h();
 
-        st->vw = ctx->w;
-        st->vh = ctx->h;
-        if (!st->have_win) {
-            ww = web_window_w();
-            wh = web_window_h();
-            if (ww > 0 && wh > 0) {
-                st->win_w = ww;
-                st->win_h = wh;
-                st->have_win = 1;
-            }
+        if (ww > 0 && wh > 0 && (ww != st->win_w || wh != st->win_h)) {
+            st->win_w = ww;
+            st->win_h = wh;
         }
-        web_resize();
+        st->settle--;
     }
+    /* The virtual canvas is the one thing needed to size the canvas, and only the context
+     * knows it, so the first pump is where the canvas gets its size. Doing it here rather
+     * than in open also puts io_set_view before the first event is read, which is what
+     * makes a click and a drawn pixel the same place. */
+    st->vw = ctx->w;
+    st->vh = ctx->h;
+    web_resize();
     io_set_view(ctx, st->w, st->h);
     for (i = 0; i < g_queue_n; i++) {
         io_post_event(ctx, &g_queue[i]);

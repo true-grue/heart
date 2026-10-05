@@ -1,16 +1,16 @@
 <!doctype html>
 <meta charset="utf-8">
 <!-- initial-scale and nothing else. The canvas is sized by the backend in whole multiples
-     and the browser magnifies whatever it likes on top of that, so nothing here may pin
-     the scale: a page that says how big it is has already taken the choice away from the
-     two finger zoom a player on a phone expects to work. -->
+     and the browser is not allowed to magnify or pan it, so nothing here may pin or cap
+     the scale: this is the device's own screen size and the backend fits the game to it. -->
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quest</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  /* No touch-action here on purpose. Setting it to none also forbids the browser's own
-     pinch zoom, and the backend sets no value either, so both leave it at the default. */
-  #canvas { display: block; margin: 0 auto; }
+  /* none: the only gestures that reach this game are the game's own. A browser free to
+     pinch and pan the page under a canvas sized in whole multiples makes the scale
+     whatever the last gesture left it. The platform sets the same value inline. */
+  #canvas { display: block; touch-action: none; margin: 0 auto; }
   /* The button lives under the canvas and only while there is a bar to live in. A page
      button on top of the game would sit on Выход, the one control that has to stay
      reachable. */
