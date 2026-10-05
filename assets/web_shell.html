@@ -43,8 +43,13 @@ window.addEventListener("unhandledrejection", function (e) {
 });
 
 /* Fullscreen, in the bar under the canvas and only while that bar exists. iPhone Safari
- * has no element fullscreen at all, so the document is the fallback and the request is
- * guarded: a phone that cannot do it must not get an error for asking. */
+ * has no element fullscreen at all, so the request is guarded: a phone that cannot do it
+ * must not get an error for asking.
+ *
+ * The document goes fullscreen rather than the canvas, and that is the whole reason the
+ * controls stay reachable: a fullscreen canvas is the only thing on screen, so the
+ * button that got you there disappears with it, and the top strip of the game ends up
+ * offset by margins meant for a page that is no longer there. */
 var full = document.getElementById("full");
 function place() {
   var c = document.getElementById("canvas");
@@ -52,21 +57,20 @@ function place() {
   if (!c) { return; }
   var r = c.getBoundingClientRect();
   var bar = page.clientHeight - r.bottom;
-  full.hidden = !(bar >= full.offsetHeight + 8);
+  full.hidden = document.fullscreenElement ? false : !(bar >= full.offsetHeight + 8);
   full.style.bottom = Math.max(4, Math.floor(bar / 2) - full.offsetHeight / 2) + "px";
 }
 full.onclick = function () {
-  var c = document.getElementById("canvas");
   var page = document.documentElement;
   if (document.fullscreenElement) {
     if (document.exitFullscreen) { document.exitFullscreen(); }
     return;
   }
-  if (c.requestFullscreen) { c.requestFullscreen(); }
-  else if (page.requestFullscreen) { page.requestFullscreen(); }
-  else if (c.webkitRequestFullscreen) { c.webkitRequestFullscreen(); }
+  if (page.requestFullscreen) { page.requestFullscreen(); }
+  else if (page.webkitRequestFullscreen) { page.webkitRequestFullscreen(); }
 };
 window.addEventListener("resize", place);
+document.addEventListener("fullscreenchange", place);
 /* The canvas is sized by the backend on its first frame, so its bar does not exist yet
  * when load fires. */
 setInterval(place, 500);

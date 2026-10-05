@@ -70,20 +70,25 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h, int crisp), {
        smaller than the canvas; there the canvas is shrinking and dropping every other
        pixel would lose more than smoothing costs. */
     c.style.imageRendering = crisp ? "pixelated" : "auto";
-    /* Centred here rather than by the page's layout: a whole-number scale leaves bars of
-     * up to a whole row and column, and they have to end up the same on both sides. */
-    c.style.position = "absolute";
-    c.style.left = Math.max(0, Math.floor((window.innerWidth - css_w) / 2)) + "px";
-    c.style.top = Math.max(0, Math.floor((window.innerHeight - css_h) / 2)) + "px";
-    /* none, so the only gestures that reach this game are the game's own. A browser that
-     * may pinch and pan the page underneath a canvas sized in whole multiples turns the
-     * scale into whatever the last gesture left, which is the one thing the integer
-     * multiplier exists to prevent. */
-    c.style.display = "block";
+    if (document.fullscreenElement === c) {
+        /* A fullscreen canvas is the whole screen, so the offsets that centre it in the
+         * page push it off instead: the top strip with the buttons is what goes missing,
+         * and a button that cannot be pressed is a dead control. */
+        c.style.position = "static";
+        c.style.left = "0px";
+        c.style.top = "0px";
+    } else {
+        /* Centred here rather than by the page's layout: a whole-number scale leaves bars
+         * of up to a whole row and column, and they have to end up the same on both sides. */
+        c.style.position = "absolute";
+        c.style.left = Math.max(0, Math.floor((window.innerWidth - css_w) / 2)) + "px";
+        c.style.top = Math.max(0, Math.floor((window.innerHeight - css_h) / 2)) + "px";
+    }
     /* none, so the only gestures that reach this game are the game's own. A browser free
      * to pinch and pan the page underneath a canvas sized in whole multiples turns the
      * scale into whatever the last gesture left, which is the one thing the integer
      * multiplier exists to prevent. */
+    c.style.display = "block";
     c.style.touchAction = "none";
     var s = document.getElementById("quest_web_css");
     if (!s) {
