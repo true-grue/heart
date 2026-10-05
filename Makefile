@@ -127,9 +127,16 @@ QUEST_ASAN  := $(BUILD)/quest-asan
 # flag silently reused objects and a binary linked against another runtime: the
 # demo survived once as a stale executable needing a libasan that no longer
 # existed, and make reported "nothing to be done".
+#
+# It depends on the Makefile itself, and that dependency is the whole mechanism: the
+# stamp has no prerequisite of its own, so without it the recipe runs only while the
+# file is missing. Changing CC still worked, because the compiler is part of the name,
+# but changing a flag did not — adding one to LDFLAGS_X rebuilt nothing, make reported
+# success, and the artifact was unchanged. It was caught only by the file being the
+# wrong size afterwards.
 CONFIG := $(BUILD)/.config-$(notdir $(CC))-$(CSTD)
 
-$(CONFIG):
+$(CONFIG): Makefile
 	@mkdir -p $(BUILD)
 	@rm -f $(BUILD)/.config-*
 	@printf '%s\n' '$(CC) $(CSTD) $(WARN) $(REL) $(DBG) $(SAN) $(ANALYZE) $(INC) $(CFLAGS_X) $(LDFLAGS_X)' > $@
