@@ -26,6 +26,7 @@ typedef struct WebState {
     int32_t vw, vh;    /* virtual canvas, from the context; the backing store in release */
     int32_t fixed_w, fixed_h;  /* test key asked for a resolution: browser scales nothing */
     int32_t win_w, win_h;      /* window in CSS pixels, for the letterbox */
+    int32_t css_w, css_h;      /* box the canvas is shown in, to notice a change */
     int have_win;              /* the window size was measured, not guessed */
     double dpr;        /* backing pixels per CSS pixel */
     uint32_t *stage;   /* backing sized, 0xRRGGBB, filled by io_scale_canvas */
@@ -47,7 +48,7 @@ static unsigned g_queue_n;
  *
  * image-rendering is pixelated because the game smooths nothing anywhere else: letting the
  * browser interpolate would be the one place a pixel got blurred. */
-EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h), {
+EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h, int crisp), {
     var c = document.getElementById("canvas");
     if (!c) {
         c = document.createElement("canvas");
@@ -65,7 +66,10 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h), {
     }
     c.style.width = css_w + "px";
     c.style.height = css_h + "px";
-    c.style.imageRendering = "pixelated";
+    /* Nearest neighbour while the factor is whole, which is every case but a window
+       smaller than the canvas; there the canvas is shrinking and dropping every other
+       pixel would lose more than smoothing costs. */
+    c.style.imageRendering = crisp ? "pixelated" : "auto";
     /* Centred here rather than by the page's layout: a whole-number scale leaves bars of
      * up to a whole row and column, and they have to end up the same on both sides. */
     c.style.position = "absolute";
@@ -145,6 +149,7 @@ EM_JS(void, web_blit, (int w, int h, void *ptr), {
 static void web_resize(void) {
     WebState *st = &g_web;
     int32_t css_w, css_h;
+    int crisp = 1;
 
     if (st->vw <= 0 || st->vh <= 0) {
         return;
@@ -168,16 +173,32 @@ static void web_resize(void) {
         if (kh < k) {
             k = kh;
         }
-        if (k < 1) {
-            k = 1;   /* smaller than the canvas: shown at one to one and cropped */
+        if (k >= 1) {
+            css_w = st->vw * k;
+            css_h = st->vh * k;
+        } else {
+            /* The window is smaller than the canvas, which is every phone held upright.
+               No whole number fits here, so the canvas takes the fraction that does, and
+               nearest neighbour is switched off: dropping every other pixel while
+               shrinking loses more than the smoothing it costs. */
+            double fx = (double)st->win_w / (double)st->vw;
+            double fy = (double)st->win_h / (double)st->vh;
+            double f = (fx < fy) ? fx : fy;
+
+            css_w = (int32_t)((double)st->vw * f + 0.5);
+            css_h = (int32_t)((double)st->vh * f + 0.5);
+            crisp = 0;
         }
-        css_w = st->vw * k;
-        css_h = st->vh * k;
         st->w = st->vw;
         st->h = st->vh;
     }
+    if (css_w == st->css_w && css_h == st->css_h) {
+        return;   /* nothing moved, and touching the DOM every frame would be waste */
+    }
+    st->css_w = css_w;
+    st->css_h = css_h;
     st->dpr = (double)st->w / (double)css_w;
-    web_canvas_open(st->w, st->h, css_w, css_h);
+    web_canvas_open(st->w, st->h, css_w, css_h, crisp);
 }
 
 /* Browser coordinates are CSS pixels from the top left of the canvas; the view is in
