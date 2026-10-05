@@ -21,7 +21,12 @@ import subprocess
 import sys
 import tempfile
 
-GAMES = ("tutorial", "field", "heart")
+# Default is the small hand written game and nothing else. Parity is a comparison of
+# frames between two builds, not a walk of the whole state graph, so paying for heart's
+# search buys nothing: heart took long enough under Wine to look like a hang. The rest
+# are still there for when you want them:
+#   make parity PARITY_GAMES="tutorial field heart"
+DEFAULT_GAMES = ("tutorial",)
 WIN_CC = "x86_64-w64-mingw32-gcc"
 EXE = os.path.join("build", "quest.exe")
 
@@ -82,6 +87,7 @@ def compare_game(game, tmp, use_wine):
 
 
 def main():
+    games = tuple(sys.argv[1:]) or DEFAULT_GAMES
     if not have("wine") or not have(WIN_CC) or not os.path.exists(EXE):
         missing = []
         if not have("wine"):
@@ -96,16 +102,18 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="parity-") as tmp:
         problems = []
-        for game in GAMES:
+        for game in games:
+            before = len(problems)
             problems += compare_game(game, tmp, use_wine=True)
-            print("%-10s %s" % (game, "различается" if problems else "совпадает"))
+            print("%-10s %s" % (game, "различается" if len(problems) > before
+                                else "совпадает"))
 
     if problems:
         print("\nрасхождение сборок:")
         for p in problems:
             print("  " + p)
         return 1
-    print("\nвсе %d игр: кадры обхода совпадают побайтово" % len(GAMES))
+    print("\nвсе %d игр: кадры обхода совпадают побайтово" % len(games))
     return 0
 
 

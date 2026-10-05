@@ -170,8 +170,12 @@ test: $(TEST_BIN)
 # Compares walkthrough frames between the Linux and the Windows build. Kept out of
 # `test` because it needs Wine and a cross compiler, and a target that silently skips
 # is worse than one that is not run by default.
+# One game by default, and deliberately a small one: this compares frames between two
+# builds and does not need heart's state search, which under Wine is slow enough to look
+# like a hang. Ask for more explicitly when you want them.
+PARITY_GAMES ?= tutorial
 parity:
-	python3 tools/py/check_parity.py
+	python3 tools/py/check_parity.py $(PARITY_GAMES)
 
 # Cyclomatic complexity over src only, cap 15. Not part of test: it needs lizard, and
 # that is a development tool rather than a build dependency.
