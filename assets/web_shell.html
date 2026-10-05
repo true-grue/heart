@@ -1,9 +1,17 @@
 <!doctype html>
 <meta charset="utf-8">
+<!-- Without this a phone lays the page out at about 980 px and shrinks it to fit, which is
+     why the game looked wrong on a handset and why there was nothing sensible to pinch.
+     user-scalable is here so two fingers may zoom: the canvas keeps a whole-number scale
+     and a player who wants it bigger gets it from the browser, which is the one scaler
+     that can follow a gesture continuously. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
 <title>Quest</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  #canvas { display: block; touch-action: none; margin: 0 auto; }
+  /* pinch-zoom, not none: none here would forbid the two finger zoom as well, and the
+     platform sets the same value inline so the two cannot drift apart silently. */
+  #canvas { display: block; touch-action: pinch-zoom; margin: 0 auto; }
 </style>
 <body>
 <pre id="fail" hidden style="color:#f66;font:14px/1.4 monospace;padding:10px;white-space:pre-wrap"></pre>

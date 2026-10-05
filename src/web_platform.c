@@ -71,7 +71,11 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h), {
     c.style.position = "absolute";
     c.style.left = Math.max(0, Math.floor((window.innerWidth - css_w) / 2)) + "px";
     c.style.top = Math.max(0, Math.floor((window.innerHeight - css_h) / 2)) + "px";
-    c.style.touchAction = "none";
+    /* pinch-zoom and not none: none also forbids the two finger zoom a player on a phone
+     * expects, and panning is not wanted either because the game handles the drag itself.
+     * What is measured below is the layout viewport rather than window.innerWidth, so a
+     * pinch does not come back as a resize and start the scale changing under the finger. */
+    c.style.touchAction = "pinch-zoom";
     c.style.display = "block";
     var s = document.getElementById("quest_web_css");
     if (!s) {
@@ -102,9 +106,11 @@ EM_JS(int, web_key_size, (int which), {
  * browser: the pointer arrives as the number it was pointing at and the write lands
  * somewhere in the heap. Measured, not reasoned about: it returned 0 and 216900000 where
  * the window was 1280x817, and the canvas was then sized from a number that was never a
- * size. */
-EM_JS(int, web_window_w, (void), { return window.innerWidth | 0; })
-EM_JS(int, web_window_h, (void), { return window.innerHeight | 0; })
+ * size. It reads the layout viewport, not window.innerWidth, because a two finger zoom
+ * changes the visual viewport and would otherwise come back as a resize and move the
+ * scale while the fingers are still down. */
+EM_JS(int, web_window_w, (void), { return document.documentElement.clientWidth | 0; })
+EM_JS(int, web_window_h, (void), { return document.documentElement.clientHeight | 0; })
 
 /* Canvas ImageData is RGBA, a 0xRRGGBB word in little endian memory is B,G,R,0, and
  * alpha is opaque everywhere. Byte order is the platform's business: the framebuffer is
