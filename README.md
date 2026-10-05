@@ -17,7 +17,7 @@
 
 ## Играть в браузере
 
-<https://true-grue.github.io/heart/>
+<https://true-grue.github.io/heart/heart>
 
 ## Структура репозитория
 
