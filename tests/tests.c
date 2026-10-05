@@ -1734,6 +1734,73 @@ static TextFont load_font(Arena *a, int32_t px) {
 }
 
 
+/* The strip must not hide what the player is carrying.
+ *
+ * It used to put the overflow behind a "+N" chip, which told the player how many
+ * things he could not see and not which. Now every name stays and the long ones are
+ * shortened, longest first, with a dot for the mark.
+ *
+ * The lengths here are byte lengths, which is what the strip is given. Cyrillic is two
+ * bytes a character, so writing 4 for "ключ" reads half the word: the first version of
+ * this test did exactly that and looked like a font fault. */
+static void test_items_fit_shortens_the_longest_first(void) {
+    Arena a;
+    TextFont f;
+    static char label[6][LABEL_MAX];
+    uint32_t len[6];
+    static const char *const names[6] = {
+        "плетёный шар", "журнал заседаний", "свинцовый оливец",
+        "латунная трубка", "спички отогреты", "фонарь"
+    };
+    int32_t total = 0;
+    size_t k;
+    size_t dotted = 0;
+
+    CHECK_INT(arena_init(&a, g_arena_mem, sizeof g_arena_mem), 0);
+    f = load_font(&a, 16);
+    CHECK_INT(f.count, 197);
+
+    for (k = 0; k < 6; k++) {
+        len[k] = (uint32_t)strlen(names[k]);
+        CHECK(len[k] < LABEL_MAX);
+        memcpy(label[k], names[k], len[k] + 1);
+    }
+
+    items_fit(&f, label, len, 6);
+
+    /* Everything is still there: no name may be dropped, however long. */
+    for (k = 0; k < 6; k++) {
+        CHECK(len[k] > 0);
+        total += (int32_t)text_width(&f, label[k], len[k]) + 2 * CHIP_PAD_X + CHIP_GAP;
+        if (strchr(label[k], '.') != NULL) {
+            dotted++;
+            /* The dot marks the shortening and never trails a space. */
+            CHECK(label[k][len[k] - 1] == '.');
+            CHECK(strstr(label[k], " .") == NULL);
+        }
+    }
+    CHECK(total - CHIP_GAP <= GAME_W - 2 * MARGIN_X);
+    CHECK(dotted > 0);
+
+    /* A name that fits keeps its whole name: shortening everything would throw away
+     * information for nothing. */
+    CHECK(strcmp(label[5], "фонарь") == 0);
+
+    /* A row that already fits is left exactly as it is. */
+    {
+        static char two[2][LABEL_MAX];
+        uint32_t two_len[2];
+
+        memcpy(two[0], "ключ", strlen("ключ") + 1);
+        memcpy(two[1], "карта", strlen("карта") + 1);
+        two_len[0] = (uint32_t)strlen(two[0]);
+        two_len[1] = (uint32_t)strlen(two[1]);
+        items_fit(&f, two, two_len, 2);
+        CHECK(strcmp(two[0], "ключ") == 0);
+        CHECK(strcmp(two[1], "карта") == 0);
+    }
+}
+
 static void test_text_font_loads(void) {
     Arena a;
     TextFont f;
@@ -2017,6 +2084,7 @@ const test_case test_cases[] = {
     TEST_CASE(test_io_subpixel_shape_still_draws),
     TEST_CASE(test_io_rejects_oversized_polygon_without_drawing_part),
     TEST_CASE(test_io_backend_test_is_inert),
+    TEST_CASE(test_items_fit_shortens_the_longest_first),
     TEST_CASE(test_text_font_loads),
     TEST_CASE(test_text_glyph_lookup),
     TEST_CASE(test_text_advances_scale),
