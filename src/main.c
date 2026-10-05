@@ -356,7 +356,8 @@ int main(int argc, char **argv) {
     char *script_text;
     size_t font_len = 0, script_len = 0;
     int running = 1;
-    int walking;
+    int walking = 0;
+    const char *walk_dir = NULL;
     int fps_on = 0;
     int audit = 0;
     double last = now_ms();
@@ -421,8 +422,22 @@ int main(int argc, char **argv) {
     ui.cmd.filled = 0;
 
     /* The walkthrough draws into the framebuffer and never reads input, so it runs
-     * on the test backend: no window, no display, nothing to tear down. */
-    walking = (argc >= 4 && strcmp(argv[2], "--walk") == 0);
+     * on the test backend: no window, no display, nothing to tear down.
+     *
+     * The flag is looked for instead of read at argv[2], because a per-game build carries
+     * its name inside and takes it optionally: `heart --walk out` is three arguments, and
+     * insisting on four left it opening a window and waiting for a display instead of
+     * walking, which is the one build where nobody has a display. */
+    {
+        int a;
+        for (a = 1; a < argc; a++) {
+            if (strcmp(argv[a], "--walk") == 0 && a + 1 < argc) {
+                walking = 1;
+                walk_dir = argv[a + 1];
+                break;
+            }
+        }
+    }
     {
         /* The same frame report stress prints, so the two can be compared instead of
          * guessed at. Off unless asked for: a game that prints its own rate every
@@ -462,7 +477,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (walking) {
-        int rc = walk_run(&ui, &game, &script, argv[3]);
+        int rc = walk_run(&ui, &game, &script, walk_dir);
 
         io_backend_close(&ctx);
         /* The walkthrough returns from here, so the script text was never reaching the
