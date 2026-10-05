@@ -1,5 +1,10 @@
-#include "walk.h"
+/* Must precede every include, including the project's own headers: a feature-test
+ * macro consulted after <stdio.h> has already been read is no macro at all. On musl
+ * clock_gettime is declared either way, so moving this below an include cost nothing
+ * here and hid the breakage; on glibc it fails to compile. */
 #define _POSIX_C_SOURCE 199309L
+
+#include "walk.h"
 
 #include "ui.h"
 #include "arena.h"
