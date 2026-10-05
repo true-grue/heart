@@ -141,7 +141,7 @@ $(TOBJ)/%.o: %.c $(CONFIG)
 
 $(AOBJ)/%.o: %.c $(CONFIG)
 	@mkdir -p $(dir $@)
-	$(CC) $(CSTD) $(WARN) $(DBG) $(ANALYZE) $(INC) -MMD -MP -c -o $@ $<
+	$(CC) $(CSTD) $(WARN) $(DBG) $(ANALYZE) $(INC) $(TEST_INC) -MMD -MP -c -o $@ $<
 
 $(TEST_BIN): $(TEST_OBJ)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) -o $@ $^
