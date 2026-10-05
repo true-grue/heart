@@ -44,7 +44,16 @@ HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null >/dev/null 2>&1 
 
 # The target is chosen by the compiler, not by the caller: a MinGW GCC is a Windows
 # build and needs no other switch, which is the whole point of the one-line seam.
-ifneq (,$(findstring mingw,$(CC)))
+# Web: the same seam, one file and a branch. The canvas backend needs ASYNCIFY because
+# the application's frame loop blocks in wait() and a browser thread cannot block without
+# handing the event loop back; --preload-file puts the font and the scripts where the paths
+# in the game registry already point.
+ifneq (,$(findstring emcc,$(CC)))
+LIB_SRC   += src/web_platform.c
+CFLAGS_X  := -DIO_WEB -sASYNCIFY
+LDFLAGS_X := -sASYNCIFY --preload-file assets@/assets
+EXE       := .html
+else ifneq (,$(findstring mingw,$(CC)))
 LIB_SRC   += src/win_platform.c
 CFLAGS_X  := -DIO_WIN
 # winpthread carries clock_gettime, which is what the application asks for on every
@@ -78,12 +87,15 @@ HDRS := src/arena.h \
 # directory is not automatically a build target, because a game that does not compile is
 # not something to discover during a build.
 GAMES     := tutorial field heart
-GAME_BINS := $(addprefix $(BUILD)/,$(GAMES))
+# The web build emits an .html rather than an executable, so the suffix is one variable
+# instead of a second set of rules. Empty everywhere else, where it changes nothing.
+EXE      ?=
+GAME_BINS := $(addprefix $(BUILD)/,$(addsuffix $(EXE),$(GAMES)))
 
 STRESS_SRC := tests/stress.c
 QUEST_SRC := src/main.c src/walk.c
 STRESS   := $(BUILD)/stress
-QUEST    := $(BUILD)/quest
+QUEST    := $(BUILD)/quest$(EXE)
 TOOL_SRC := tools/test.c
 TEST_INC := -Itools
 TEST_SRC := tools/test_main.c tests/tests.c
@@ -146,7 +158,7 @@ $(QUEST): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 $(STRESS_ASAN): $(LIB_SRC) $(STRESS_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) $(INC) $(CFLAGS_X) -o $@ $(LIB_SRC) $(STRESS_SRC) $(LDFLAGS_X)
 
-$(GAME_BINS): $(BUILD)/%: $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
+$(GAME_BINS): $(BUILD)/%$(EXE): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(REL) $(INC) $(CFLAGS_X) -DGAME_DEFAULT='"$*"' \
 		-o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
 
