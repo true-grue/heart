@@ -15,16 +15,20 @@
  * only under ASYNCIFY, which is why the Makefile names it for this build and nothing
  * else. main() is not touched, and it is not supposed to be.
  *
- * One space, not two: every coordinate the backend reports and every size it asks the
- * view to be is in canvas backing pixels, that is CSS pixels times devicePixelRatio.
- * The same factor that sizes the canvas multiplies pointer coordinates, and the view
- * is set to the backing size, so io_poll's conversion and the drawing scale agree by
- * construction rather than by being kept in step. */
+ * One space, not two, and which space depends on the path: in release the view is the
+ * virtual canvas and the browser enlarges it, under the test key the view is the pinned
+ * resolution and the browser does nothing at all. Either way this factor turns a browser
+ * coordinate in CSS pixels into a backing pixel, and the view is set to the backing size,
+ * so io_poll's conversion and the drawing scale agree by construction. */
 
 typedef struct WebState {
     int32_t w, h;      /* backing store size, which is also what the view is set to */
-    double dpr;        /* canvas pixels per CSS pixel */
-    uint32_t *stage;   /* window sized, 0xRRGGBB, filled by io_scale_canvas */
+    int32_t vw, vh;    /* virtual canvas, from the context; the backing store in release */
+    int32_t fixed_w, fixed_h;  /* test key asked for a resolution: browser scales nothing */
+    int32_t win_w, win_h;      /* window in CSS pixels, for the letterbox */
+    int have_win;              /* the window size was measured, not guessed */
+    double dpr;        /* backing pixels per CSS pixel */
+    uint32_t *stage;   /* backing sized, 0xRRGGBB, filled by io_scale_canvas */
     size_t stage_cap;
 } WebState;
 
@@ -37,9 +41,13 @@ static WebState g_web;
 static IoEvent g_queue[WEB_QUEUE];
 static unsigned g_queue_n;
 
-/* Creates or reuses the canvas emscripten's shell page already contains, sizes it to
- * the backing store, and keeps the browser from turning a drag into a scroll. */
-EM_JS(int, web_canvas_open, (int w, int h, double dpr), {
+/* Creates or reuses the canvas emscripten's shell page already contains, sizes the
+ * backing store and the box the browser shows it in, and keeps the browser from turning
+ * a drag into a scroll.
+ *
+ * image-rendering is pixelated because the game smooths nothing anywhere else: letting the
+ * browser interpolate would be the one place a pixel got blurred. */
+EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h), {
     var c = document.getElementById("canvas");
     if (!c) {
         c = document.createElement("canvas");
@@ -48,8 +56,9 @@ EM_JS(int, web_canvas_open, (int w, int h, double dpr), {
     }
     c.width = w;
     c.height = h;
-    c.style.width = (w / dpr) + "px";
-    c.style.height = (h / dpr) + "px";
+    c.style.width = css_w + "px";
+    c.style.height = css_h + "px";
+    c.style.imageRendering = "pixelated";
     c.style.touchAction = "none";
     c.style.display = "block";
     c.style.margin = "0 auto";
@@ -62,6 +71,25 @@ EM_JS(int, web_canvas_open, (int w, int h, double dpr), {
     }
     Module.questCtx = c.getContext("2d", { alpha: false });
     return 1;
+})
+
+/* The test key: ?canvas=1280x960 pins the backing store and the box it is shown in to the
+ * same numbers, so the browser scales nothing and what the page shows is what the native
+ * build draws at that resolution. Absent, the release path runs and the browser enlarges
+ * the canvas itself. */
+EM_JS(int, web_key_size, (int which), {
+    var m = /[?&]canvas=([0-9]+)x([0-9]+)/.exec(location.search);
+    if (!m) {
+        return 0;
+    }
+    var v = parseInt(m[which === 0 ? 1 : 2], 10);
+    return v > 0 ? v : 0;
+})
+
+/* The window in CSS pixels: what the release path fits the canvas into. */
+EM_JS(void, web_window_size, (int *w, int *h), {
+    w[0] = window.innerWidth | 0;
+    h[0] = window.innerHeight | 0;
 })
 
 /* Canvas ImageData is RGBA, a 0xRRGGBB word in little endian memory is B,G,R,0, and
@@ -83,15 +111,45 @@ EM_JS(void, web_blit, (int w, int h, void *ptr), {
     Module.questCtx.putImageData(new ImageData(d, w, h), 0, 0);
 })
 
-/* The canvas is sized on open and again on a resize. Both go through here so the
- * backing store and the view cannot be set to different numbers. */
-static void web_resize(int32_t w, int32_t h) {
-    if (w <= 0 || h <= 0) {
+/* The canvas is sized on open and again on a resize, and both go through here so the
+ * backing store, the box it is shown in and the view cannot end up as three different
+ * numbers.
+ *
+ * Release: the backing store is the virtual canvas and the box is the largest rectangle
+ * of the same shape that fits the window. The browser does the enlarging, so nothing in
+ * the heap depends on how big the screen is and a large window cannot ask for memory the
+ * page does not have. The bars are the page background, which is why the fit keeps the
+ * shape instead of stretching to the window.
+ *
+ * Test key: both are the requested resolution, so the browser does nothing at all. */
+static void web_resize(void) {
+    WebState *st = &g_web;
+    int32_t css_w, css_h;
+
+    if (st->vw <= 0 || st->vh <= 0 || st->win_w <= 0 || st->win_h <= 0) {
         return;
     }
-    g_web.w = w;
-    g_web.h = h;
-    web_canvas_open(w, h, g_web.dpr);
+    if (st->fixed_w > 0 && st->fixed_h > 0) {
+        css_w = st->fixed_w;
+        css_h = st->fixed_h;
+        st->w = st->fixed_w;
+        st->h = st->fixed_h;
+    } else {
+        double va = (double)st->vw / (double)st->vh;
+        double wa = (double)st->win_w / (double)st->win_h;
+
+        if (wa > va) {
+            css_h = st->win_h;
+            css_w = (int32_t)((double)st->win_h * va + 0.5);
+        } else {
+            css_w = st->win_w;
+            css_h = (int32_t)((double)st->win_w / va + 0.5);
+        }
+        st->w = st->vw;
+        st->h = st->vh;
+    }
+    st->dpr = (double)st->w / (double)css_w;
+    web_canvas_open(st->w, st->h, css_w, css_h);
 }
 
 /* Browser coordinates are CSS pixels from the top left of the canvas; the view is in
@@ -154,8 +212,13 @@ static EM_BOOL web_touch_cb(int type, const EmscriptenTouchEvent *ev, void *user
 static EM_BOOL web_resize_cb(int type, const EmscriptenUiEvent *ev, void *user) {
     (void)type;
     (void)user;
-    web_resize((int32_t)((double)ev->windowInnerWidth * g_web.dpr),
-               (int32_t)((double)ev->windowInnerHeight * g_web.dpr));
+    if (ev->windowInnerWidth <= 0 || ev->windowInnerHeight <= 0) {
+        return true;
+    }
+    g_web.win_w = (int32_t)ev->windowInnerWidth;
+    g_web.win_h = (int32_t)ev->windowInnerHeight;
+    g_web.have_win = 1;
+    web_resize();
     return true;
 }
 
@@ -164,20 +227,25 @@ static int web_open(void *self, const char *title, int32_t w, int32_t h) {
     const char *canvas = "#canvas";
 
     (void)title;
-    st->dpr = emscripten_get_device_pixel_ratio();
-    if (st->dpr <= 0.0) {
-        st->dpr = 1.0;
-    }
-    st->w = 0;
-    st->h = 0;
+    (void)w;
+    (void)h;
     st->stage = NULL;
     st->stage_cap = 0;
+    st->have_win = 0;
     g_queue_n = 0;
 
-    /* io_backend_open passes the view size, so the window opens at the size the caller
-     * asked for; the canvas it shows is the virtual canvas scaled into the backing
-     * store, which is that size in device pixels. */
-    web_resize((int32_t)((double)w * st->dpr), (int32_t)((double)h * st->dpr));
+    st->fixed_w = web_key_size(0);
+    st->fixed_h = web_key_size(1);
+    /* The size the caller asked for is the fallback, not the measurement: at the first
+     * pump the page has not been laid out yet and window.innerWidth is still 0, which
+     * left the canvas unsized and the game with nothing to draw into. A resize reports a
+     * real number and takes over from here. */
+    st->win_w = w;
+    st->win_h = h;
+
+    /* The canvas cannot be sized here: what it is sized from is the virtual canvas, and
+     * the only place that is known is the context, which the backend does not get until
+     * the first pump. The window size is remembered above and applied there. */
 
     emscripten_set_mousedown_callback(canvas, NULL, 0, web_mouse_cb);
     emscripten_set_mouseup_callback(canvas, NULL, 0, web_mouse_cb);
@@ -220,13 +288,29 @@ static void web_wait(void *self, int timeout_ms) {
 }
 
 static int web_pump(void *self, IoCtx *ctx) {
+    WebState *st = (WebState *)self;
     unsigned i;
 
-    (void)self;
-    /* The view is in backing pixels and the application set it to the size it asked
-     * for. Setting it here, before the first event is read, is what makes a click and
-     * a drawn pixel the same place when devicePixelRatio is not 1. */
-    io_set_view(ctx, g_web.w, g_web.h);
+    /* The virtual canvas is the one thing needed to size the canvas that only the context
+     * knows, so the first pump is where the canvas gets its size. Doing it here rather
+     * than in open is also what puts io_set_view before the first event is read, which is
+     * what makes a click and a drawn pixel the same place. */
+    if (ctx->w != st->vw || ctx->h != st->vh) {
+        int ww, wh;
+
+        st->vw = ctx->w;
+        st->vh = ctx->h;
+        if (!st->have_win) {
+            web_window_size(&ww, &wh);
+            if (ww > 0 && wh > 0) {
+                st->win_w = ww;
+                st->win_h = wh;
+                st->have_win = 1;
+            }
+        }
+        web_resize();
+    }
+    io_set_view(ctx, st->w, st->h);
     for (i = 0; i < g_queue_n; i++) {
         io_post_event(ctx, &g_queue[i]);
     }

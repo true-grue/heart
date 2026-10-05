@@ -58,9 +58,14 @@ WEB_SHELL := assets/web_shell.html
 # ALLOW_MEMORY_GROWTH is not an optimisation, it is the framebuffer. web_present allocates
 # window_w*dpr * window_h*dpr * 4 on every resize, so the heap a page needs is whatever the
 # visitor's screen asks for: 2560x1920 is 19.7 MB on its own. Without growth the heap is
-# capped at its initial size and a large window aborts with OOM, which is a crash the
-# visitor sees and nobody reproduces locally on a small window.
-LDFLAGS_X := -sASYNCIFY -sALLOW_MEMORY_GROWTH --preload-file assets@/assets \
+# capped at its initial size and a large window aborts with OOM.
+# ABORTING_MALLOC=0 is what makes running out of memory survivable. Emscripten aborts by
+# default, so malloc never returns NULL and the checks every allocation in this project
+# already has are unreachable on the web. With it, web_present gets NULL and returns
+# without drawing: the visitor keeps the last frame instead of getting an error dialog.
+# A player must never be shown an engine failure, and on native this is already the case.
+LDFLAGS_X := -sASYNCIFY -sALLOW_MEMORY_GROWTH -sABORTING_MALLOC=0 \
+            --preload-file assets@/assets \
             --exclude-file $(WEB_SHELL) --shell-file $(WEB_SHELL)
 EXE       := .html
 else ifneq (,$(findstring mingw,$(CC)))
