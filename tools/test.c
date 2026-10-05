@@ -48,6 +48,6 @@ int test_run(const test_case *cases, size_t count, const char *filter) {
         cases[i].fn();
     }
 
-    printf("%zu tests run, %lu failures\n", ran, g_failures);
+    printf("%lu tests run, %lu failures\n", (unsigned long)ran, g_failures);
     return (ran > 0 && g_failures == 0) ? 0 : 1;
 }

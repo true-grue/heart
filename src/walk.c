@@ -486,12 +486,12 @@ int walk_run(Ui *ui, Game *g, const Script *s, const char *dir) {
          * broken when the only thing that had happened was that the search got slower
          * than the box it ran in. */
         if (g_nodes_n >= WALK_MAX_SEEN) {
-            fprintf(stderr, "победа не найдена: обход дошёл до предела в %zu состояний. "
+            fprintf(stderr, "победа не найдена: обход дошёл до предела в %lu состояний. "
                             "Это не значит, что её нет — нужен больший предел\n",
-                    (size_t)WALK_MAX_SEEN);
+                    (unsigned long)WALK_MAX_SEEN);
         } else {
-            fprintf(stderr, "этим скриптом нельзя выиграть: перебраны все %zu состояний\n",
-                    g_nodes_n);
+            fprintf(stderr, "этим скриптом нельзя выиграть: перебраны все %lu состояний\n",
+                    (unsigned long)g_nodes_n);
         }
         free(g_nodes);
         g_nodes = NULL;

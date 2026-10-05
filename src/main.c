@@ -271,11 +271,11 @@ static int probe_load(const char *path) {
         free(text);
         return 1;
     }
-    printf("rooms %zu\n", sc.room_count);
-    printf("rules %zu\n", sc.rule_count);
-    printf("flags %zu\n", sc.sym_count);
+    printf("rooms %lu\n", (unsigned long)sc.room_count);
+    printf("rules %lu\n", (unsigned long)sc.rule_count);
+    printf("flags %lu\n", (unsigned long)sc.sym_count);
     errors = script_validate(&sc, d, sizeof d / sizeof d[0], &n);
-    printf("errors %zu\n", errors);
+    printf("errors %lu\n", (unsigned long)errors);
     for (i = 0; i < n && i < sizeof d / sizeof d[0]; i++) {
         size_t len2 = 0;
         const char *name = script_sym(&sc, d[i].subject, &len2);
