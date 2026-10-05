@@ -1183,7 +1183,7 @@ static void draw(Ui *ui) {
  *
  * It runs on the test backend: no window, no events, only the framebuffer. */
 
-#define WALK_MAX_SEEN 262144
+#define WALK_MAX_SEEN 8192
 
 /* One queue entry per state, holding the command that reached it and the entry it came
  * from. Breadth first, so the first win found is the shortest route there is, and a
