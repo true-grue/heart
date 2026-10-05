@@ -70,20 +70,10 @@ EM_JS(int, web_canvas_open, (int w, int h, int css_w, int css_h, int crisp), {
        smaller than the canvas; there the canvas is shrinking and dropping every other
        pixel would lose more than smoothing costs. */
     c.style.imageRendering = crisp ? "pixelated" : "auto";
-    /* Centred here rather than by the page's layout: a whole-number scale leaves bars of
-     * up to a whole row and column, and they have to end up the same on both sides. Fullscreen
-     * is the document and not the canvas, so the page layout is what holds in both modes.
-     *
-     * The layout viewport, not window.innerWidth, and that is not fussiness: the size the
-     * canvas was fitted to comes from documentElement.clientHeight, and the two are the
-     * same number on a desktop and different on a phone, where innerHeight counts the
-     * address bar that slides away. Fitting to one and centring in the other left the
-     * field sitting off centre after a fullscreen toggle, and only on Android. */
-    var pw = document.documentElement.clientWidth;
-    var ph = document.documentElement.clientHeight;
-    c.style.position = "absolute";
-    c.style.left = Math.max(0, Math.floor((pw - css_w) / 2)) + "px";
-    c.style.top = Math.max(0, Math.floor((ph - css_h) / 2)) + "px";
+    /* The canvas is centred by the page layout, not by offsets measured here. A browser
+     * that counts anything else in the flow when placing it puts the field off centre —
+     * iPad Safari counted the button below — and offsets computed afterwards move the
+     * canvas without moving whatever was counted, so the error never washes out. */
     /* none, so the only gestures that reach this game are the game's own. A browser free
      * to pinch and pan the page underneath a canvas sized in whole multiples turns the
      * scale into whatever the last gesture left, which is the one thing the integer

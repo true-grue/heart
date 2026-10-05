@@ -7,10 +7,18 @@
 <title>Quest</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  /* The canvas is centred by the layout and not by offsets read out of the window: a
+     browser that counts anything else in the flow when placing it — iPad Safari counted
+     the button below — puts the field off centre, and no amount of measuring the window
+     afterwards moves it back. Flexbox centres what is in the flow, which is the canvas
+     and nothing else. */
+  body { display: flex; align-items: center; justify-content: center; }
+  /* Fixed, so a failure cannot push the canvas out of the middle while it is being read. */
+  #fail { position: fixed; top: 0; left: 0; right: 0; z-index: 2; }
   /* none: the only gestures that reach this game are the game's own. A browser free to
      pinch and pan the page under a canvas sized in whole multiples makes the scale
      whatever the last gesture left it. The platform sets the same value inline. */
-  #canvas { display: block; touch-action: none; margin: 0 auto; }
+  #canvas { display: block; touch-action: none; flex: none; }
   /* The button lives in the widest bar around the canvas and only while a bar has room
      for it. A page button on top of the game would sit on Выход, the one control that has
      to stay reachable, and one placed at a fixed offset from the bottom went off screen
