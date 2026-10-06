@@ -7,9 +7,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* A vector font: glyph outlines already flattened to line segments, so neither
- * the loader's output nor the rasteriser knows about curves. One TextFont is
- * bound to one pixel size; load another for a different size. */
+/* A vector font: glyph outlines already flattened to line segments, so neither the loader's
+ * output nor the rasteriser knows about curves. One TextFont is bound to one pixel size; load
+ * another for a different size. */
 
 typedef struct TextGlyph {
     uint32_t codepoint;

@@ -37,10 +37,9 @@ const IoBackend io_backend_test = {
     test_close
 };
 
-/* The platform entry point, and only when the build has no windowing target at all,
- * which is what a headless run wants. No other platform is named here: the build says
- * which file is the platform, and this file is told so by its own flag rather than by
- * knowing what else could have been chosen. */
+/* The platform entry point, and only when the build has no windowing target at all.
+ * No other platform is named here: the build says which file is the platform, and this
+ * one is told by its own flag rather than by knowing what else could have been chosen. */
 #ifdef IO_TEST
 const IoBackend *io_platform_backend(void) {
     return &io_backend_test;

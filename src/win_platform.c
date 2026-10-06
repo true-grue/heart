@@ -4,10 +4,9 @@
 
 #include "utf8.h"
 
-/* The pointer messages that carry touch are declared only under WINVER >= 0x0602, and
- * whether _WIN32_WINNT alone is enough to raise WINVER differs between MinGW versions:
- * it built here and failed to build elsewhere with the same source. So both are asked
- * for, before windows.h, because afterwards it is too late. */
+/* The touch pointer messages need WINVER >= 0x0602, and whether _WIN32_WINNT alone
+ * raises WINVER differs between MinGW versions: it built here and failed elsewhere from
+ * the same source. Both are asked for, before windows.h, because afterwards it is too late. */
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0602
 #endif
@@ -18,8 +17,8 @@
 #include <windows.h>
 #include <windowsx.h>   /* GET_X_LPARAM, which splits the sign correctly */
 
-/* And spelled out as well, so the file does not depend on which of those two the SDK
- * decided to honour. These are fixed ABI values and cannot drift. */
+/* Spelled out as well, so the file does not depend on which the SDK honoured. These are
+ * fixed ABI values and cannot drift. */
 #ifndef WM_POINTERUPDATE
 #define WM_POINTERUPDATE 0x0245
 #endif
@@ -34,20 +33,18 @@
 #endif
 
 /* Win32 window backend. The canvas stays virtual, as everywhere: this scales it to the
- * window, and a resize changes only the window size.
- *
- * No keyboard path, the same as everywhere else in the project. */
+ * window, and a resize changes only the window size. No keyboard path. */
 
 typedef struct WinState {
     HWND hwnd;
     IoCtx *ctx;          /* set by present and pump; the wndproc reads it */
-    HDC dc;              /* the window */
-    HDC mem;             /* memory DC holding the DIB the canvas is drawn into */
+    HDC dc;
+    HDC mem;
     HBITMAP dib;
-    HGDIOBJ old;         /* what SelectObject returned, so it can be put back */
-    uint32_t *bits;      /* the DIB pixels: io_scale_canvas writes here directly */
-    int32_t w, h;        /* client size in physical pixels */
-    int32_t dib_w, dib_h;/* size the DIB was built for */
+    HGDIOBJ old;
+    uint32_t *bits;      /* DIB pixels; io_scale_canvas writes here directly */
+    int32_t w, h;
+    int32_t dib_w, dib_h;
     int quit;
 } WinState;
 
@@ -55,9 +52,8 @@ static WinState g_win;
 
 static const wchar_t k_class[] = L"QuestWindow";
 
-/* A 32-bit BI_RGB DIB wants B,G,R,A bytes in memory, and io.c produces a 0xRRGGBB word,
- * which on a little endian machine is exactly B,G,R,0. So the canvas goes to the window
- * with no channel swap, and the alpha byte that comes along is ignored by GDI. */
+/* A 32-bit BI_RGB DIB wants B,G,R,A in memory and io.c produces a 0xRRGGBB word, which
+ * little endian makes exactly B,G,R,0: no channel swap, and GDI ignores the alpha. */
 static void win_make_dib(WinState *st) {
     BITMAPINFO info;
 
@@ -70,8 +66,7 @@ static void win_make_dib(WinState *st) {
     memset(&info, 0, sizeof info);
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     info.bmiHeader.biWidth = st->w;
-    /* A negative height makes it top-down, so row zero in memory is the top row and
-     * the canvas needs no flip on the way out. */
+    /* Negative height is top-down: row zero is the top row, so no flip on the way out. */
     info.bmiHeader.biHeight = -st->h;
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
@@ -106,8 +101,7 @@ static void win_push(WinState *st) {
     EndPaint(st->hwnd, &ps);
 }
 
-/* One place builds every pointer event, because the mouse and the touch path differ
- * only in the message and the device tag. */
+/* One place builds every pointer event; mouse and touch differ only in message and tag. */
 static void win_pointer(WinState *st, IoEventKind kind, LPARAM lp, int device) {
     IoEvent ev;
 
@@ -116,8 +110,8 @@ static void win_pointer(WinState *st, IoEventKind kind, LPARAM lp, int device) {
     }
     memset(&ev, 0, sizeof ev);
     ev.kind = kind;
-    /* GET_X_LPARAM splits the sign for coordinates past 32767; a plain LOWORD would
-     * make the right and bottom edges of a large window negative. */
+    /* GET_X_LPARAM splits the sign past 32767; a plain LOWORD makes the right and
+     * bottom edges of a large window negative. */
     ev.x = (int32_t)GET_X_LPARAM(lp);
     ev.y = (int32_t)GET_Y_LPARAM(lp);
     ev.button = 0;   /* one button is the whole vocabulary: there is no wheel */
@@ -125,28 +119,22 @@ static void win_pointer(WinState *st, IoEventKind kind, LPARAM lp, int device) {
     io_post_event(st->ctx, &ev);
 }
 
-/* Declaring the process DPI-aware before the first window exists.
- *
- * Without this, on a display that is not at 100%, Windows stretches the whole window as
- * a bitmap on top of the scaling io_scale_canvas already did. That is a second resample
- * of every pixel, and a sixteen pixel font is exactly the thing that suffers: letters
- * come out chipped and some strokes vanish. Nothing about it shows up at 100%, which is
- * why it reads as a font problem rather than as scaling.
- *
- * Resolved by name rather than linked, so the same binary still loads on a Windows old
- * enough not to have the newer entry point. */
+/* DPI awareness before the first window exists: without it Windows stretches the whole
+ * window as a bitmap on top of the scaling io_scale_canvas already did, a second
+ * resample, and a sixteen pixel font comes out chipped with strokes missing. Nothing
+ * shows at 100%, so it reads as a font problem rather than as scaling. */
 static void win_dpi_aware(void) {
-    /* PROCESS_PER_MONITOR_DPI_AWARE, written out because the enum name is only visible
-     * from a newer SDK than this file targets, and the value is what matters. */
+    /* PROCESS_PER_MONITOR_DPI_AWARE (2), spelled out: the enum name needs a newer SDK
+     * than this file targets. Resolved by name, not linked, so the binary still loads
+     * on Windows too old for the newer entry point. */
     typedef HRESULT (WINAPI *set_awareness_t)(int);
     HMODULE shcore = LoadLibraryW(L"shcore.dll");
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     BOOL (WINAPI *set_aware)(void);
 
     if (shcore != NULL) {
-        /* Through void (*)(void): GetProcAddress returns FARPROC, and casting that
-         * straight to a specific signature trips -Wcast-function-type. This is the
-         * spelling GCC documents for it. */
+        /* Through void (*)(void): casting FARPROC straight to a signature trips
+         * -Wcast-function-type. This is the spelling GCC documents. */
         set_awareness_t set_awareness =
             (set_awareness_t)(void (*)(void))GetProcAddress(shcore,
                                                            "SetProcessDpiAwareness");
@@ -157,8 +145,7 @@ static void win_dpi_aware(void) {
         }
         FreeLibrary(shcore);
     }
-    /* Windows Vista and later. Enough on its own: it stops the window being resampled
-     * by the compositor, which is the whole of the problem here. */
+    /* Vista and later: enough on its own, it stops the compositor resampling. */
     if (user32 != NULL) {
         set_aware = (BOOL(WINAPI *)(void))(void (*)(void))GetProcAddress(
             user32, "SetProcessDPIAware");
@@ -179,14 +166,13 @@ static LRESULT CALLBACK win_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         st->w = (int32_t)LOWORD(lp);
         st->h = (int32_t)HIWORD(lp);
-        /* The view has to be told, or every later tap is translated through the size
-         * the window had before, and no button is ever hit again. */
+        /* The view must be told: otherwise every later tap is translated through the
+         * old size and no button is ever hit again. */
         if (st->w > 0 && st->h > 0 && st->ctx != NULL) {
             io_set_view(st->ctx, st->w, st->h);
         }
         /* CreateWindowExW sends WM_SIZE before win_open has made the memory DC, so the
-         * guard is on that and not on the size: at that moment there is nothing to
-         * rebuild, and SelectObject on a NULL DC is a hard failure. */
+         * guard is on that and not on the size: SelectObject on a NULL DC is fatal. */
         if (st->mem != NULL && st->w > 0 && st->h > 0 &&
             (st->w != st->dib_w || st->h != st->dib_h)) {
             win_make_dib(st);
@@ -197,15 +183,12 @@ static LRESULT CALLBACK win_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         win_push(st);
         return 0;
 
-    /* Without this the click that lands on an inactive window is spent waking it, and
-     * the button under the pointer does not fire. The player has to click twice, and
-     * only while the window happens to be inactive, which makes it look intermittent
-     * rather than wrong. */
+    /* Without this the click on an inactive window is spent waking it and the button
+     * does not fire: two clicks, and only while inactive, so it looks intermittent. */
     case WM_MOUSEACTIVATE:
         return MA_ACTIVATE;
 
-    /* Painting the background ourselves is what stops the window flashing white
-     * between frames, and there is nothing else that belongs there. */
+    /* Painting the background ourselves stops the white flash between frames. */
     case WM_ERASEBKGND:
         return 1;
 
@@ -220,9 +203,8 @@ static LRESULT CALLBACK win_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     /* Touch arrives as pointer messages with the kind in wParam. There is no
-     * WM_POINTERMOVE: a pointer that moves says WM_POINTERUPDATE, and that is the only
-     * one of the three that carries a position. The device tag is the single thing
-     * downstream that tells a tap from a click, so it has to be set here. */
+     * WM_POINTERMOVE: a moving pointer says WM_POINTERUPDATE, the only one of the three
+     * carrying a position. The device tag is what tells a tap from a click downstream. */
     case WM_POINTERDOWN:
     case WM_POINTERUP:
     case WM_POINTERUPDATE:
@@ -267,8 +249,7 @@ static int win_open(void *self, const char *title, int32_t w, int32_t h) {
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = win_wndproc;
     wc.hInstance = GetModuleHandleW(NULL);
-    /* IDC_ARROW is a MAKEINTRESOURCE for the A entry point; the wide call needs it
-     * widened by hand. */
+    /* IDC_ARROW is a MAKEINTRESOURCE for the A call; the wide call widens it by hand. */
     wc.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
     wc.lpszClassName = k_class;
     win_dpi_aware();
@@ -277,16 +258,12 @@ static int win_open(void *self, const char *title, int32_t w, int32_t h) {
         return 0;
     }
 
-    /* CreateWindowExW takes the OUTER size. Passing the size the canvas wants gives an
-     * outer window of that size, and the client area comes out smaller by the frame and
-     * the title bar: measured here, 1272x926 for a request of 1280x960. The canvas then
-     * scales by 1.9281 instead of 2, and nearest neighbour at a fractional scale
-     * duplicates some rows of pixels and skips others. On a sixteen pixel font that
-     * reads as letters cut in half, and it is Windows only because X11 hands back the
-     * size it was given.
-     *
-     * So ask for the window that yields the client area wanted, rather than asking for
-     * the client area and getting the frame as well. */
+    /* CreateWindowExW takes the OUTER size: ask for the canvas size and the client area
+     * comes out smaller by frame and title bar (1272x926 for a request of 1280x960), so
+     * scaling lands on 1.9281 instead of 2 and nearest neighbour at a fractional scale
+     * reads as letters cut in half on a sixteen pixel font. Windows only, because X11
+     * hands back the size it was given. So ask for the window that yields the client
+     * area wanted, rather than the client area and the frame as well. */
     {
         RECT want;
 
@@ -294,7 +271,7 @@ static int win_open(void *self, const char *title, int32_t w, int32_t h) {
         want.top = 0;
         want.right = (LONG)w;
         want.bottom = (LONG)h;
-        /* Converts in place: the client rectangle comes back as the outer one. */
+        /* In place: the client rectangle comes back as the outer one. */
         if (AdjustWindowRectEx(&want, WS_OVERLAPPEDWINDOW, FALSE, 0) != FALSE) {
             w = (int32_t)(want.right - want.left);
             h = (int32_t)(want.bottom - want.top);
@@ -309,8 +286,8 @@ static int win_open(void *self, const char *title, int32_t w, int32_t h) {
     }
     SetWindowLongPtrW(st->hwnd, GWLP_USERDATA, (LONG_PTR)st);
 
-    /* io_backend_open is given the outer size, and only the client area shows the
-     * canvas, so measure it rather than trusting what was asked for. */
+    /* io_backend_open is given the outer size and only the client area shows, so
+     * measure it rather than trusting what was asked for. */
     GetClientRect(st->hwnd, &r);
     st->w = (int32_t)(r.right - r.left);
     st->h = (int32_t)(r.bottom - r.top);
@@ -342,8 +319,7 @@ static void win_present(void *self, IoCtx *ctx) {
     InvalidateRect(st->hwnd, NULL, FALSE);
 }
 
-/* Sleeps until Windows has a message, so a frame loop costs nothing while the window is
- * idle. Same reason the X11 backend waits on the socket. */
+/* Sleeps until Windows has a message. Same reason the X11 backend waits on the socket. */
 static void win_wait(void *self, int timeout_ms) {
     MSG msg;
 
@@ -374,8 +350,8 @@ static void win_close(void *self) {
     WinState *st = (WinState *)self;
 
     if (st->dib != NULL && st->mem != NULL) {
-        /* Put the memory DC's original bitmap back before deleting ours, or GDI keeps
-         * a dangling selection and every later draw on that DC is undefined. */
+        /* Put the DC's original bitmap back before deleting ours, or GDI keeps a
+         * dangling selection and every later draw on that DC is undefined. */
         SelectObject(st->mem, st->old);
         DeleteObject(st->dib);
         st->dib = NULL;
@@ -404,9 +380,8 @@ const IoBackend io_backend_win = {
     win_close
 };
 
-/* The platform entry point. Unconditional inside this file's own guard, for the same
- * reason as the other platform files: the build chose this one, so nothing here has to
- * know which other platform files exist in order not to collide with them. */
+/* Unconditional inside this file's own guard, as in the other platform files: the build
+ * chose this one, so nothing here knows which others exist. */
 const IoBackend *io_platform_backend(void) {
     return &io_backend_win;
 }

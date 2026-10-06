@@ -5,9 +5,7 @@
 
 #include <string.h>
 
-/* Line based, same shape as the script and atlas loaders: one pass to count, one
- * to fill. Glyphs arrive sorted by codepoint, so lookup is a binary search and no
- * sorting code is needed here. */
+/* Glyphs arrive sorted by codepoint, so lookup is a binary search. */
 
 static const char *skip_ws(const char *p, const char *end) {
     while (p < end && (*p == ' ' || *p == '\t')) {
@@ -17,7 +15,6 @@ static const char *skip_ws(const char *p, const char *end) {
 }
 
 
-/* Reads up to max integers from a line of whitespace separated numbers. */
 static int read_numbers(const char *s, size_t n, int32_t *out, int max, int *got) {
     const char *end = s + n;
     int k = 0;
@@ -49,9 +46,8 @@ static int read_numbers(const char *s, size_t n, int32_t *out, int max, int *got
     return 1;
 }
 
-/* Matches a leading keyword and leaves the cursor after it. This has to stay a
- * macro: in a function the parameter decays to a pointer and sizeof yields the
- * pointer size, so the comparison would read past the literal. */
+/* Must stay a macro: as a function parameter the key decays to a pointer, so sizeof
+ * yields the pointer size and the comparison reads past the literal. */
 #define AFTER_KEY(s, n, key)                                                  \
     (((n) < sizeof(key) - 1 || memcmp((s), (key), sizeof(key) - 1) != 0)      \
          ? NULL                                                               \
@@ -153,7 +149,7 @@ TextStatus text_font_load(Arena *a, TextFont *out, const char *text, size_t len,
         return TEXT_E_NOMEM;
     }
 
-    /* font units to 16.16 pixels; division keeps it deterministic on negatives */
+    /* font units to 16.16; division, not a shift, so negatives stay deterministic */
     scale = (IoFixed)(((int64_t)px_size * IO_FX_ONE) / out->upem);
     out->px_size = px_size;
     out->scale = scale;
@@ -201,9 +197,8 @@ TextStatus text_font_load(Arena *a, TextFont *out, const char *text, size_t len,
             if (!read_numbers(ls, ll, num, 4, &got) || got != 4) {
                 return TEXT_E_SYNTAX;
             }
-            /* Font units have y pointing up, the screen has y down, so the
-             * vertical axis is mirrored. Both windings flip together, which is
-             * why holes keep cancelling without any correction. */
+            /* Font units have y up, the screen y down, so the vertical axis is
+             * mirrored; both windings flip together, which is why holes still cancel. */
             segs[k].x0 = (IoFixed)((int64_t)num[0] * scale);
             segs[k].x1 = (IoFixed)((int64_t)num[2] * scale);
             segs[k].y0 = -(IoFixed)((int64_t)num[1] * scale);
@@ -242,8 +237,8 @@ const TextGlyph *text_glyph(const TextFont *f, uint32_t codepoint) {
     return NULL;
 }
 
-/* An absent glyph still has to move the pen, otherwise a stray byte freezes the
- * line. One em is the conventional fallback. */
+/* An absent glyph still advances the pen by one em, or a stray byte freezes
+ * the line. */
 static int32_t advance_of(const TextFont *f, uint32_t cp) {
     const TextGlyph *g = text_glyph(f, cp);
     if (g != NULL) {

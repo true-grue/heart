@@ -11,9 +11,8 @@ typedef enum ArenaStatus {
 } ArenaStatus;
 
 /* Bump allocator without free.
- * The caller owns the backing memory; the arena never calls malloc itself.
- * arena_reset returns the whole arena to its initial state.
- * The last error lives in the struct, so there is no global state. */
+ * The caller owns the backing memory; the arena never calls malloc itself, and arena_reset
+ * returns it to its initial state. The last error lives in the struct, so no global state. */
 typedef struct Arena {
     unsigned char *base;
     size_t cap;

@@ -1,5 +1,5 @@
-# GNU Make + GCC. Linux — нативно, Windows — через MSYS2/MinGW с тем же GCC.
-# wasm пока не настроен: это тот же Makefile с CC=emcc, появится вместе с io_backend_web.c.
+# GNU Make + GCC. Linux native, Windows through MSYS2/MinGW with the same GCC.
+# wasm is not set up yet: same Makefile with CC=emcc, it arrives with io_backend_web.c.
 
 CC := gcc
 AR := ar
@@ -15,15 +15,15 @@ ANALYZE := -fanalyzer
 INC := -Isrc -Itests
 
 BUILD := build
-# The published web build. Not under build/, because build/ is throwaway and this is not:
-# GitHub Pages serves this directory, so it has to be in the repository.
+# The published web build, not under build/ because build/ is throwaway and this is what
+# GitHub Pages serves, so it has to be in the repository.
 WEB    := heart
 OBJ   := $(BUILD)/obj
 TOBJ  := $(BUILD)/tobj
 AOBJ  := $(BUILD)/an
 DOBJ  := $(BUILD)/dobj
 
-# Списки исходников явные: детерминированный порядок линковки, без $(shell find).
+# Explicit source lists: deterministic link order, no $(shell find).
 LIB_SRC  := src/arena.c \
             src/utf8.c \
             src/dsl.c \
@@ -33,37 +33,33 @@ LIB_SRC  := src/arena.c \
             src/font.c \
             src/ui.c
 
-# The X11 backend is the only part outside the engine that links a system library.
-# Windows and Web backends will use their own platform interfaces instead.
+# The X11 backend is the only part outside the engine that links a system library; the
+# Windows and Web backends use their own platform interfaces.
 X11_SRC  := src/x11_platform.c
 X11_FLAGS := -DIO_X11
 X11_LIBS := -lX11
-# Both streams go to /dev/null, and that is the whole trick. -E writes the
-# preprocessed header to stdout, and $(shell) captures stdout, so with only stderr
-# thrown away HAVE_X11 came out as half a megabyte of Xlib.h with a 1 at the end, the
-# comparison below never matched, and every build since silently had no X11 in it.
-# Nothing noticed because the tests and the walkthrough run on the test backend.
+# Both streams go to /dev/null, and that is the whole trick: $(shell) captures stdout and -E
+# writes the preprocessed header there, so HAVE_X11 once came out as half a megabyte of Xlib.h
+# and every build since silently had no X11 in it. Nothing noticed because the tests and the
+# walkthrough run on the test backend.
 HAVE_X11 := $(shell $(CC) -x c -include X11/Xlib.h -E /dev/null >/dev/null 2>&1 && echo 1)
 
-# The target is chosen by the compiler, not by the caller: a MinGW GCC is a Windows
-# build and needs no other switch, which is the whole point of the one-line seam.
-# Web: the same seam, one file and a branch. The canvas backend needs ASYNCIFY because
-# the application's frame loop blocks in wait() and a browser thread cannot block without
-# handing the event loop back; --preload-file puts the font and the scripts where the paths
-# in the game registry already point.
+# The target is chosen by the compiler, not by the caller, which is the whole point of the
+# one-line seam. Web is the same seam, one file and a branch: the canvas backend needs ASYNCIFY
+# because the frame loop blocks in wait() and a browser thread cannot block without handing the
+# event loop back; --preload-file puts the font and the scripts where the paths in the game
+# registry already point.
 ifneq (,$(findstring emcc,$(CC)))
 LIB_SRC   += src/web_platform.c
 CFLAGS_X  := -DIO_WEB -sASYNCIFY
 WEB_SHELL := assets/web_shell.html
-# ALLOW_MEMORY_GROWTH is not an optimisation, it is the framebuffer. web_present allocates
-# window_w*dpr * window_h*dpr * 4 on every resize, so the heap a page needs is whatever the
-# visitor's screen asks for: 2560x1920 is 19.7 MB on its own. Without growth the heap is
-# capped at its initial size and a large window aborts with OOM.
-# ABORTING_MALLOC=0 is what makes running out of memory survivable. Emscripten aborts by
+# ALLOW_MEMORY_GROWTH is not an optimisation, it is the framebuffer: web_present allocates
+# window_w*dpr * window_h*dpr * 4 on every resize, and 2560x1920 is 19.7 MB on its own, so
+# without growth a large window aborts with OOM.
+# ABORTING_MALLOC=0 is what makes running out of memory survivable: Emscripten aborts by
 # default, so malloc never returns NULL and the checks every allocation in this project
-# already has are unreachable on the web. With it, web_present gets NULL and returns
-# without drawing: the visitor keeps the last frame instead of getting an error dialog.
-# A player must never be shown an engine failure, and on native this is already the case.
+# already has are unreachable on the web. With it, web_present gets NULL and returns without
+# drawing, so the visitor keeps the last frame instead of getting an error dialog.
 LDFLAGS_X := -sASYNCIFY -sALLOW_MEMORY_GROWTH -sABORTING_MALLOC=0 \
             --preload-file assets@/assets \
             --exclude-file $(WEB_SHELL) --shell-file $(WEB_SHELL)
@@ -71,15 +67,17 @@ EXE       := .html
 else ifneq (,$(findstring mingw,$(CC)))
 LIB_SRC   += src/win_platform.c
 CFLAGS_X  := -DIO_WIN
-# winpthread carries clock_gettime, which is what the application asks for on every
-# platform. Some MinGW builds link it implicitly and some do not, so it is named.
+# winpthread carries clock_gettime, which is what the application asks for on every platform,
+# and some MinGW builds link it implicitly while some do not, so it is named.
 #
-# And it is linked statically on purpose. By default the executable imports
-# libwinpthread-1.dll and refuses to start without it beside it, so every copy of the
-# game has to carry a DLL along. Static costs about 60 kB and the game is one file that
-# cannot lose its neighbour. -static-libwinpthread does not exist in this GCC, so the
-# archive is picked out by hand.
+# Linked statically because by default the executable imports libwinpthread-1.dll and refuses
+# to start without it beside it, so every copy of the game would have to carry a DLL. Static
+# costs about 60 kB and the game is one file that cannot lose its neighbour.
+# -static-libwinpthread does not exist in this GCC, so the archive is picked out by hand.
 LDFLAGS_X := -lgdi32 -luser32 -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+# Windows executables carry the suffix: the DLL check below names build/quest.exe, and a PE
+# file called build/heart is not something a person double-clicks.
+EXE       := .exe
 else ifeq ($(HAVE_X11),1)
 LIB_SRC   += $(X11_SRC)
 CFLAGS_X  := $(X11_FLAGS)
@@ -90,10 +88,10 @@ else
 CFLAGS_X  := -DIO_TEST
 endif
 
-# ui.h was missing until now, and it is the header with the layout structs the game
-# binary reads: without it a redefinition of a band reached nobody and the link succeeded
-# against a struct the caller no longer agreed with. walk.h is included by src/main.c and
-# lives with the rest of the walkthrough in tests/.
+# ui.h was missing until now, and it is the header with the layout structs the game binary
+# reads: without it a redefinition of a band reached nobody and the link succeeded against a
+# struct the caller no longer agreed with. walk.h is included by src/main.c and lives with the
+# rest of the walkthrough in tests/.
 HDRS := src/arena.h \
         src/utf8.h \
         src/game.h \
@@ -103,17 +101,16 @@ HDRS := src/arena.h \
         src/ui.h \
         tests/walk.h
 
-# The web shell is built into the page, so editing it has to rebuild the page: a stale
-# index with a new canvas script is the same failure as a stale header with a new struct.
+# The web shell is built into the page, so editing it has to rebuild the page: a stale index
+# with a new canvas script is the same failure as a stale header with a new struct.
 HDRS   += $(WEB_SHELL)
 
 # One target per game, so `make heart` builds the game with that script baked in and it
-# starts with no argument. The list is named rather than globbed: a script in the assets
-# directory is not automatically a build target, because a game that does not compile is
-# not something to discover during a build.
+# starts with no argument. The list is named rather than globbed: a game that does not compile
+# is not something to discover during a build.
 GAMES     := tutorial field heart
 # The web build emits an .html rather than an executable, so the suffix is one variable
-# instead of a second set of rules. Empty everywhere else, where it changes nothing.
+# instead of a second set of rules; empty everywhere else.
 EXE      ?=
 GAME_BINS := $(addprefix $(BUILD)/,$(addsuffix $(EXE),$(GAMES)))
 
@@ -136,17 +133,14 @@ TEST_BIN  := $(BUILD)/tests
 STRESS_ASAN := $(BUILD)/stress-asan
 QUEST_ASAN  := $(BUILD)/quest-asan
 
-# A stamp carrying the toolchain and the flags. Without it, switching CC or a
-# flag silently reused objects and a binary linked against another runtime: the
-# demo survived once as a stale executable needing a libasan that no longer
-# existed, and make reported "nothing to be done".
+# A stamp carrying the toolchain and the flags. Without it, switching CC or a flag silently
+# reused objects and a binary linked against another runtime: the demo survived once as a
+# stale executable needing a libasan that no longer existed, and make said nothing to be done.
 #
-# It depends on the Makefile itself, and that dependency is the whole mechanism: the
-# stamp has no prerequisite of its own, so without it the recipe runs only while the
-# file is missing. Changing CC still worked, because the compiler is part of the name,
-# but changing a flag did not — adding one to LDFLAGS_X rebuilt nothing, make reported
-# success, and the artifact was unchanged. It was caught only by the file being the
-# wrong size afterwards.
+# It depends on the Makefile itself, and that dependency is the whole mechanism: the stamp has
+# no prerequisite of its own, so the recipe runs only while the file is missing. Changing CC
+# still worked, because the compiler is part of the name, but changing a flag did not — adding
+# one to LDFLAGS_X rebuilt nothing and the artifact was the wrong size afterwards.
 CONFIG := $(BUILD)/.config-$(notdir $(CC))-$(CSTD)
 
 $(CONFIG): Makefile
@@ -156,7 +150,7 @@ $(CONFIG): Makefile
 
 DEP := $(LIB_OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(AN_OBJ:.o=.d)
 
-.PHONY: all test parity complexity duplicates analyze demo demo-asan win web clean $(GAMES)
+.PHONY: all test parity complexity duplicates analyze demo demo-asan win lin web clean $(GAMES)
 
 all: $(LIB)
 
@@ -178,8 +172,8 @@ $(AOBJ)/%.o: %.c $(CONFIG)
 $(TEST_BIN): $(TEST_OBJ)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) -o $@ $^
 
-# The two interactive programs, built without sanitizers: no ASan runtime to ship
-# into something a person actually plays with.
+# The two interactive programs, built without sanitizers: no ASan runtime to ship into
+# something a person actually plays with.
 $(STRESS): $(LIB_SRC) $(STRESS_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(REL) $(INC) $(CFLAGS_X) -o $@ $(LIB_SRC) $(STRESS_SRC) $(LDFLAGS_X)
 
@@ -194,12 +188,9 @@ $(GAME_BINS): $(BUILD)/%$(EXE): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(REL) $(INC) $(CFLAGS_X) -DGAME_DEFAULT='"$*"' \
 		-o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
 
-# The page a bare static server opens is index.html, and the game behind it is heart.
-# The file name and the game name are different things here, so the two lines above are
-# written out again rather than reached through an alias: an indirection that carried
-# these flags would have to be kept in step by hand, and nothing checks that.
-# Only exists for a web build — everywhere else the suffix is empty and this would name a
-# file nobody asked for.
+# The page a bare static server opens is index.html, and the game behind it is heart. The
+# link line is written out again rather than reached through an alias: an indirection that
+# carried these flags would have to be kept in step by hand, and nothing checks that.
 #
 # The web build lands in heart/ and not in build/, because this directory is the one that
 # gets published and therefore the one that has to be committed. A copy step would mean
@@ -214,10 +205,18 @@ endif
 $(QUEST_ASAN): $(LIB_SRC) $(QUEST_SRC) $(HDRS) $(CONFIG)
 	$(CC) $(CSTD) $(WARN) $(DBG) $(SAN) $(INC) $(CFLAGS_X) -o $@ $(LIB_SRC) $(QUEST_SRC) $(LDFLAGS_X)
 
-# Windows is chosen by the compiler; this target is only so that the compiler does not
-# have to be remembered. Nothing else about the build changes.
+# The three builds of one game. Each target only names a compiler or a suffix, so that the
+# difference between the platforms stays the difference the compiler makes. All three produce
+# heart with the game baked in, and no suffix is left for the reader to guess.
+#
+# Windows is chosen by the compiler; this target is only so that the compiler does not have to
+# be remembered.
 win:
-	$(MAKE) CC=x86_64-w64-mingw32-gcc quest
+	$(MAKE) CC=x86_64-w64-mingw32-gcc $(BUILD)/heart.exe
+
+# Native, and the only one of the three that needs no toolchain chosen for it.
+lin:
+	$(MAKE) $(BUILD)/heart
 
 # The same idea for the web: the compiler is named once and the build changes with it.
 # emcc is on PATH after the emsdk environment script is sourced; EMCC names a specific
@@ -246,7 +245,7 @@ test: $(TEST_BIN)
 # is worse than one that is not run by default.
 # One game by default, and deliberately a small one: this compares frames between two
 # builds and does not need heart's state search, which under Wine is slow enough to look
-# like a hang. Ask for more explicitly when you want them.
+# like a hang.
 PARITY_GAMES ?= tutorial
 parity:
 	python3 tools/py/check_parity.py $(PARITY_GAMES)

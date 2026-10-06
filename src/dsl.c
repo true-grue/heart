@@ -7,8 +7,7 @@
 
 /* ------------------------------------------------------------------ sink -- */
 
-/* Pass 1 runs with every array set to NULL so PUSH only counts; the arrays are
- * sized from those counts, then pass 2 fills them. */
+/* Pass 1 has every array NULL so PUSH only counts; pass 2 fills. */
 typedef struct Sink {
     ScriptRoom *rooms;
     size_t rooms_n;
@@ -32,8 +31,7 @@ typedef struct Sink {
         (count)++;                       \
     } while (0)
 
-/* &arr[i] on a NULL array is undefined behaviour, and the counting pass has no
- * arrays at all. UBSan flags it, so every slice pointer goes through here. */
+/* &arr[i] on a NULL array is UB and the counting pass has none; UBSan flags it. */
 static void *at(void *arr, size_t index, size_t elem_size) {
     if (arr == NULL) {
         return NULL;
@@ -71,19 +69,14 @@ static const char *trim_end(const char *p, const char *end) {
     return end;
 }
 
-/* lit must be a string literal at the call site. This has to stay a macro: in a
- * function the parameter would decay to a pointer and sizeof would yield the
- * pointer size instead of the string length. */
+/* lit must be a literal at the call site: as a function parameter it decays to a
+ * pointer, so sizeof would yield the pointer size. */
 #define WORD_IS(p, n, lit) \
     ((n) == sizeof(lit) - 1 && memcmp((p), (lit), sizeof(lit) - 1) == 0)
 
-/* Returns the end of p..end with trailing spaces and tabs removed. This is a
- * length, not a position: the text starts at p, so callers must compute
- * trim_end(p, end) - p and keep p as the pointer. Storing the trimmed end as the
- * pointer silently puts every text at the far side of itself, which is invisible
- * until something actually reads the bytes. */
+/* Returns the end, not the start: callers compute trim_end(p, end) - p, or every
+ * text lands at the far side of itself. */
 
-/* Consumes kw plus the whitespace after it, or returns NULL. */
 static const char *eat_kw(const char *p, const char *end, const char *kw, size_t n) {
     if ((size_t)(end - p) < n || memcmp(p, kw, n) != 0) {
         return NULL;
@@ -97,25 +90,19 @@ static const char *eat_kw(const char *p, const char *end, const char *kw, size_t
     return skip_ws(p + n + 1, end);
 }
 
-/* Words end at whitespace or on structural punctuation. Without this a closing
- * bracket would be swallowed into the identifier: "key]" instead of "key".
+/* A word is a letter, a digit or an underscore; bytes over 0x7F count as letters,
+ * since the scripts are Russian and utf8_valid already rejected the rest.
  *
- * The period is a delimiter by the owner's decision, so a room reference at the
- * end of a sentence links to the room rather than to the room plus a full stop.
- * It costs nothing on the text side, because say, end and win take the rest of
- * the line instead of one word, and a name containing a period is not something
- * the format has ever been asked to express. */
-/* A word is a letter, a digit or an underscore. Bytes over 0x7F count as letters:
- * the scripts are Russian, and the UTF-8 check has already rejected everything that
- * is not valid UTF-8, so there is nothing finer to say about them here. */
+ * The period is a delimiter by the owner's decision, so a room reference at the end
+ * of a sentence links to the room. It costs nothing on the text side: say, end and
+ * win take the rest of the line, not one word. */
 static int is_word_byte(unsigned char ch) {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
            (ch >= '0' && ch <= '9') || ch == '_' || ch >= 0x80;
 }
 
-/* Reads one word, advancing p past it. A word ends at whitespace or at one of the
- * three characters the format reserves: the colon and the two signs. NULL if there
- * is none, which is also how a sign is detected by the caller. */
+/* Reads one word, advancing p past it, NULL if there is none: that is also how the
+ * caller detects a sign. */
 static const char *read_word(const char *p, const char *end, const char **ws, size_t *wl) {
     const char *w;
 
@@ -128,8 +115,6 @@ static const char *read_word(const char *p, const char *end, const char **ws, si
     *ws = w;
     return (*wl == 0) ? NULL : p;
 }
-
-/* Next meaningful line: blank lines and lines starting with '#' are skipped. */
 
 /* ----------------------------------------------------------------- syms --- */
 
@@ -157,22 +142,12 @@ static Sym intern(Parse *P, const char *s, size_t len) {
 
 /* --------------------------------------------------------------- flags -- */
 
-/* A flag list is exactly one token: "a", "-a" or "a,-b". No spaces around the
- * commas, because a description's condition has to stay a single word and can then
- * never be mistaken for a command's verb and object.
+/* A flag list is exactly one token: "a", "-a" or "a,-b". No spaces around the commas,
+ * so a description's condition stays a single word and cannot be read as a command.
  *
- * Returns the cursor after the list, so the caller knows where the text starts
- * without having to measure the list again. */
-/* Reads repeated signed words: "-a -b", "+a +b". Every item carries its sign, because
- * the side of the colon already says whether the list is a guard or an effect, and a
- * bare word there would be a third meaning to guess at.
- *
- * Both signs are read on both sides. A guard asks for a flag either way, and an effect
- * sets or clears one: a command that drops what it was holding is as ordinary as one
- * that picks it up.
- *
- * Guards and effects share the one Cond array in the arena, so the caller notes
- * the seam and slices the two runs apart afterwards. */
+ * Every item carries its sign and both signs are read on both sides: the side of the
+ * colon already says guard or effect. Guards and effects share one Cond array, so the
+ * caller notes the seam and slices the two runs apart. */
 static const char *parse_items(Parse *P, const char *p, const char *end, int effects,
                                size_t *out_n) {
     size_t n = 0;
@@ -203,28 +178,16 @@ static const char *parse_items(Parse *P, const char *p, const char *end, int eff
 
 /* --------------------------------------------------------------- actions -- */
 
-/* Parses the consequence, which is the whole tail of a line. There is no separator
- * between actions on purpose: a command does one thing, and a print cannot swallow
- * what follows it because nothing ever follows it.
- *
- *   +a +b [text]   set the flags, then print the text
- *   go room [text]  print the text, then enter the room
- *   end [text]     finish, lost
- *   win [text]     finish, won
- *   text           print it
- *
- * The effect conditions go onto the same Cond array as the conditions of the line,
- * so the caller notes the seam and slices the two runs apart afterwards.
- */
+/* The consequence is the whole tail of a line, with no separator between actions on
+ * purpose: a command does one thing, so a print cannot swallow what follows it. */
 static const char *parse_action(Parse *P, const char *p, const char *end, Act *out,
                                 size_t *effect_len) {
     memset(out, 0, sizeof *out);
     *effect_len = 0;
     p = skip_ws(p, end);
 
-    /* Leading effects: "+a -b text". Either sign starts the list, because an effect
-     * both sets and clears, and parse_items consumes the signs itself, so this is only
-     * a peek at whether there are any. */
+    /* Leading effects: "+a -b text". Either sign starts the list; parse_items
+     * consumes the signs itself. */
     if (p < end && (*p == '+' || *p == '-')) {
         const char *q = parse_items(P, p, end, 1, effect_len);
 
@@ -234,10 +197,8 @@ static const char *parse_action(Parse *P, const char *p, const char *end, Act *o
         p = skip_ws(q, end);
     }
 
-    /* The effects do not swallow what follows: the format puts them before the action,
-     * and the action is still one. "-осколок end ..." ends the game and takes the
-     * shard out of the hands on the same line, which is what the format promises in
-     * doc/grammar.bnf and what the two neighbouring lines already read as. */
+    /* The effects do not swallow the action: they come before it, so one line can
+     * clear a flag and end the game at once. */
 
     if ((size_t)(end - p) >= 2 && p[0] == 'g' && p[1] == 'o' &&
         (p + 2 == end || p[2] == ' ' || p[2] == '\t')) {
@@ -261,9 +222,8 @@ static const char *parse_action(Parse *P, const char *p, const char *end, Act *o
         out->kind = ACT_WIN;
         p = skip_ws(p + 3, end);
     } else {
-        /* The text is the rest of the line whatever it starts with: a quotation mark is
-         * as ordinary at the start of a sentence as a letter is. Only a leading end or
-         * win is a keyword, and only when it stands alone as the first word. */
+        /* The text is the rest of the line whatever it starts with; only a leading end or win
+         * is a keyword, and only when it stands alone. */
         out->kind = ACT_SAY;
     }
     out->text = p;
@@ -273,8 +233,7 @@ static const char *parse_action(Parse *P, const char *p, const char *end, Act *o
 
 /* ----------------------------------------------------------------- lines -- */
 
-/* A room owns every fragment and rule parsed after its header, so its range is
- * only known once the next header appears or the file ends. */
+/* A room's range is known only once the next header appears or the file ends. */
 static void close_room(Sink *s) {
     size_t idx;
 
@@ -287,9 +246,7 @@ static void close_room(Sink *s) {
 }
 
 /* One line, one shape: condition, colon, consequence. Up to one word before the
- * colon means a description of the room; two or three means a command. A colon is
- * the whole marker an unconditional description needs, because prose is what a
- * script mostly is and prose should not have to announce itself. */
+ * colon describes the room, two or three is a command. */
 static ScriptStatus parse_line_body(Parse *P, const char *s, const char *end,
                                     int line, int is_command) {
     const char *colon = (const char *)memchr(s, ':', (size_t)(end - s));
@@ -308,14 +265,14 @@ static ScriptStatus parse_line_body(Parse *P, const char *s, const char *end,
     head_end = colon;
 
     if (!is_command) {
-        /* "flags : text", or ": text" with nothing in front. */
+        /* "flags : text" */
         const char *text;
         Frag f;
 
         p = skip_ws(s, head_end);
         if (p != head_end) {
-            /* The returned position matters: what is left between it and the colon
-             * is a word the format has nowhere to put. */
+            /* Anything left between the returned position and the colon is a word
+             * the format has nowhere to put. */
             p = parse_items(P, p, head_end, 0, &cond_len);
             if (p == NULL) {
                 return SCR_E_SYNTAX;
@@ -342,9 +299,8 @@ static ScriptStatus parse_line_body(Parse *P, const char *s, const char *end,
     {
         Rule r;
 
-        /* words [conditions] : [effects] action. The words are greedy and stop at the
-         * first sign or at the colon, so how long a command is comes from the script
-         * and not from a fixed pair here. */
+        /* words [conditions] : [effects] action. The words are greedy, stopping at the first
+         * sign or the colon, so how long a command is comes from the script. */
         p = skip_ws(s, head_end);
         r.word_len = 0;
         while (p < head_end && *p != '+' && *p != '-') {
@@ -370,8 +326,7 @@ static ScriptStatus parse_line_body(Parse *P, const char *s, const char *end,
         }
         eff_start = P->sink.conds_n;
 
-        /* The consequence starts after the colon. p is still on the colon here,
-         * which is a delimiter, so handing it over would read an empty word. */
+        /* p is still on the colon, a delimiter, so handing it over would read an empty word. */
         p = parse_action(P, colon + 1, end, &r.act, &effect_len);
         if (p == NULL) {
             return SCR_E_SYNTAX;
@@ -436,9 +391,8 @@ static ScriptStatus parse_line(Parse *P, const char *s, size_t n, int *in_room, 
         return SCR_E_SYNTAX;
     }
     {
-        /* The colon splits the line, and whether any bare word stands before it
-         * decides whether this describes the room or is something the player can
-         * do. Words inside a condition list are signed, so they do not count. */
+        /* A bare word before the colon makes this a command; words inside a condition list
+         * are signed, so they do not count. */
         const char *colon = (const char *)memchr(s, ':', (size_t)(end - s));
         const char *head_end = (colon != NULL) ? colon : end;
         const char *q = s;
@@ -635,8 +589,8 @@ static int cond_has(const Cond *list, uint32_t n, Sym sym, uint8_t present) {
     return 0;
 }
 
-/* True when every condition of a is also required by b, so b can never fire
- * while a is still reachable. An unconditional a implies everything. */
+/* True when every condition of a is also required by b; an unconditional a
+ * implies everything. */
 static int guard_implies(const Rule *a, const Rule *b) {
     uint32_t i;
 
@@ -654,8 +608,8 @@ static int guard_implies(const Rule *a, const Rule *b) {
     return 1;
 }
 
-/* Two rules are the same command when their words match one for one. Commands are
- * now however long the script makes them, so the old pair compare is gone. */
+/* Commands are however long the script makes them, so the old verb/object pair
+ * compare is gone. */
 static int same_command(const Rule *a, const Rule *b) {
     uint32_t i;
 
@@ -731,8 +685,7 @@ size_t script_validate(const Script *s, Diagnostic *out, size_t cap, size_t *out
         }
     }
 
-    /* Flags mentioned in any guard must be set by some rule, otherwise the
-     * branch can never be taken (or is always taken) and the author has a typo. */
+    /* A flag used in a guard but never set is a typo: the branch can never be taken. */
     for (i = 0; i < s->room_count; i++) {
         const ScriptRoom *room = &s->rooms[i];
         for (j = 0; j < room->frag_len; j++) {

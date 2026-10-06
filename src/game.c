@@ -2,9 +2,7 @@
 
 #include <string.h>
 
-/* Flag lookup is a linear scan over a small table. Sorting or hashing it would be
- * a structure built for a size the format does not reach, and the flag set is
- * fixed once the script is loaded. */
+/* Linear scan: the flag set is fixed once the script is loaded and is small. */
 
 static int flag_slot(const Game *g, Sym name) {
     size_t k;
@@ -16,7 +14,6 @@ static int flag_slot(const Game *g, Sym name) {
     return -1;
 }
 
-/* Returns 1 when the flag was not in the table before. */
 static int flag_intern(Game *g, Sym name) {
     int k = flag_slot(g, name);
     if (k >= 0) {
@@ -36,9 +33,8 @@ static int flag_is(const Game *g, Sym name) {
     return (k >= 0) ? g->flag_present[k] : 0;
 }
 
-/* An effect carries a sign like a guard does: +flag puts the flag there, -flag takes it
- * away. A command that drops what it was holding is as ordinary as one that picks it
- * up, so there is one function and not a setter plus a clearer. */
+/* One function, not a setter plus a clearer: dropping what a command held is as
+ * ordinary as picking it up. */
 static void flag_apply(Game *g, Sym name, int present) {
     int k = flag_slot(g, name);
     if (k >= 0) {
@@ -46,9 +42,7 @@ static void flag_apply(Game *g, Sym name, int present) {
     }
 }
 
-/* A guard is a conjunction over flags, with ~ meaning the flag must be absent.
- * An empty guard holds, and a guard on a flag the script never sets sees it
- * absent, which is the same thing. */
+/* An empty guard holds; a flag the script never sets reads absent, same thing. */
 static int cond_holds(const Game *g, const Cond *c, uint32_t n) {
     uint32_t i;
     for (i = 0; i < n; i++) {
@@ -72,8 +66,8 @@ void game_say(Game *g, const char *text, uint32_t len) {
         return;
     }
     if (g->log_count == GAME_MAX_LOG) {
-        /* Drop the oldest line rather than refusing to speak. A player cannot
-         * scroll back past this, and the screen only ever shows the tail. */
+        /* Drop the oldest line rather than refuse to speak: only the tail is ever
+         * on screen. */
         memmove(g->log_text, g->log_text + 1, (GAME_MAX_LOG - 1) * sizeof g->log_text[0]);
         memmove(g->log_len, g->log_len + 1, (GAME_MAX_LOG - 1) * sizeof g->log_len[0]);
         memmove(g->log_headed, g->log_headed + 1, (GAME_MAX_LOG - 1) * sizeof g->log_headed[0]);
@@ -91,14 +85,12 @@ void game_say(Game *g, const char *text, uint32_t len) {
     g->log_count++;
 }
 
-/* The heading itself occupies a log line with no text of its own, so the block
- * boundaries live in the same array as the lines and cannot drift out of step with
- * it when the log is trimmed. */
+/* The heading occupies a log line with no text, so block boundaries live in the
+ * same array and cannot drift when the log is trimmed. */
 void game_head(Game *g, const char *title, uint32_t title_len, const Sym *words,
                uint32_t words_len) {
-    /* Not via game_say: that ignores an empty line, and a heading is a line with no
-     * text of its own, so it has to be appended here or it would land on the line
-     * before it. */
+    /* Not via game_say: it ignores an empty line, so the heading would land on the
+     * previous one. */
     if (g->log_count == GAME_MAX_LOG) {
         memmove(g->log_text, g->log_text + 1, (GAME_MAX_LOG - 1) * sizeof g->log_text[0]);
         memmove(g->log_len, g->log_len + 1, (GAME_MAX_LOG - 1) * sizeof g->log_len[0]);
@@ -112,26 +104,18 @@ void game_head(Game *g, const char *title, uint32_t title_len, const Sym *words,
     g->log_len[g->log_count] = title_len;
     g->log_headed[g->log_count] = 1;
     g->log_head[g->log_count] = title;
-    /* The heading keeps the whole command, not one verb and one object: a command is
-     * however many words the script gave it. Zero means the heading is a room, not
-     * something the player did. */
+    /* Zero words means the heading is a room, not something the player did. */
     g->log_words[g->log_count] = (words_len > 0) ? words : NULL;
     g->log_word_len[g->log_count] = words_len;
     g->log_count++;
 }
 
-/* The current room's description as it stands right now: every fragment whose guard
- * holds, joined by a space.
+/* Every fragment whose guard holds, joined by a space: what is true now, not what
+ * was said on entry. A flag moving is how a fragment appears or vanishes, so reading
+ * the log for the screen would show a room that no longer exists.
  *
- * The log remembers what was said when the room was entered; this is what is true now.
- * They are different things the moment a command runs, because a flag moving is how a
- * fragment appears or vanishes, and reading the log for the screen would leave the
- * player looking at a room that no longer exists. */
-/* The same text, plus where each fragment landed in it.
- *
- * The description is assembled from fragments whose guards hold, so a fragment can
- * appear because of what the player just did. To point that out, the caller has to
- * know where the fragment begins and ends; a flat string throws that away. */
+ * The spans variant also reports where each fragment landed, so the caller can point
+ * out the one the player just caused; a flat string throws that away. */
 size_t game_room_text_spans(const Game *g, char *out, size_t cap, FragSpan *spans,
                             size_t span_cap, size_t *span_n) {
     const ScriptRoom *r = script_room_by_id(g->script, g->room);
@@ -139,10 +123,8 @@ size_t game_room_text_spans(const Game *g, char *out, size_t cap, FragSpan *span
     size_t sn = 0;
     uint32_t i;
 
-    /* The count is reported, never left for the caller to guess. Guessing means looking
-     * for a zero entry past the end of what was written, which reads whatever was on the
-     * stack: on one toolchain that was zeroes, on another it was not, and the same
-     * source then behaves differently on two platforms. */
+    /* The count is reported, never left to the caller to guess: guessing reads uninitialised
+     * stack past what was written, zeroes on one toolchain and not on another. */
     if (span_n != NULL) {
         *span_n = 0;
     }
@@ -201,8 +183,8 @@ void game_enter(Game *g, Sym room) {
     }
     g->room = room;
     game_head(g, r->title, r->title_len, NULL, 0);
-    /* Every fragment whose guard holds prints, in source order. First-match-wins
-     * would leave every conditional fragment unreachable. */
+    /* All fragments in source order; first-match-wins would make conditional
+     * fragments unreachable. */
     for (i = 0; i < r->frag_len; i++) {
         const Frag *f = &r->frags[i];
         if (f->guard != NULL && f->guard_len > 0 && !cond_holds(g, f->guard, f->guard_len)) {
@@ -212,8 +194,6 @@ void game_enter(Game *g, Sym room) {
     }
 }
 
-/* A command is a run of words. Two rules are the same command when the words match
- * one for one, and a prefix matches when the rule's first prefix_len words agree. */
 static int words_match(const Sym *rule_words, uint32_t rule_len, const Sym *words,
                        size_t words_len) {
     size_t i;
@@ -229,7 +209,6 @@ static int words_match(const Sym *rule_words, uint32_t rule_len, const Sym *word
     return 1;
 }
 
-/* The rule that would run for this command, or NULL. */
 static const Rule *find_rule(const Game *g, const Sym *words, size_t words_len) {
     const ScriptRoom *r = script_room_by_id(g->script, g->room);
     uint32_t i;
@@ -280,12 +259,10 @@ int game_command(Game *g, const Sym *words, size_t words_len) {
     if (ru == NULL) {
         return 0;
     }
-    /* The command itself heads its own block, so the player can see what they just
-     * did without having to remember it. */
     game_head(g, NULL, 0, ru->words, ru->word_len);
 
-    /* Effects run before the action, so the text of the rule already sees the new
-     * flags, and so does the room a go leads into. */
+    /* Effects run before the action, so the rule's text and the room a go leads
+     * into already see the new flags. */
     for (i = 0; i < ru->effect_len; i++) {
         flag_apply(g, ru->effects[i].name, ru->effects[i].present);
     }
@@ -294,8 +271,7 @@ int game_command(Game *g, const Sym *words, size_t words_len) {
         game_say(g, ru->act.text, ru->act.text_len);
         break;
     case ACT_GO:
-        /* The text of a go prints first and the room follows, which is the order
-         * the source game used and the reason the format allows text on a go. */
+        /* The text of a go prints first, which is why the format allows text on a go. */
         if (ru->act.text_len > 0) {
             game_say(g, ru->act.text, ru->act.text_len);
         }
@@ -316,11 +292,8 @@ int game_command(Game *g, const Sym *words, size_t words_len) {
     return 1;
 }
 
-/* The palette lists verbs in the order the room declares them, not in
- * alphabetical order: the source order is what the author chose to read first. */
-/* The words that may come after a prefix, for the slot the player is filling now.
- * A command is however long the script makes it, so this is asked for once per slot
- * instead of there being a separate "verbs" and "objects" case. */
+/* The words that may come after a prefix, in the order the room declares them: the
+ * source order is what the author chose to read first. */
 size_t game_next(const Game *g, const Sym *prefix, size_t prefix_len, Sym *out,
                  size_t cap) {
     const ScriptRoom *r = script_room_by_id(g->script, g->room);
@@ -358,9 +331,8 @@ size_t game_next(const Game *g, const Sym *prefix, size_t prefix_len, Sym *out,
     return n;
 }
 
-/* Whether any word can follow this prefix, that is, whether the command the player is
- * building is not finished yet. This cannot be asked by listing into a zero-length
- * array: an empty list and a full one look identical to the caller. */
+/* Whether any word can follow this prefix, i.e. whether the command is finished.
+ * Not answerable by listing into a zero-length array: empty and full look the same. */
 size_t game_flag_count(const Game *g) {
     return g->flag_count;
 }
@@ -409,13 +381,9 @@ GameStatus game_init(Game *g, const Script *s) {
     memset(g, 0, sizeof *g);
     g->script = s;
 
-    /* Every flag the script mentions gets a slot, so a guard never has to cope
-     * with a name it has not seen and the palette can be re-evaluated cheaply.
-     *
-     * Indexing here is plain, not through the loader's at() helper: every index
-     * sits inside a loop bounded by its own length, so the address of element
-     * zero of a NULL array is never formed. That is the only case at() exists
-     * for, and it needs no helper when the length check is right there. */
+    /* Every flag the script mentions gets a slot, so a guard never meets an unknown
+     * name. Plain indexing, not the loader's at(): every index sits inside a loop
+     * bounded by its own length, so &arr[0] of a NULL array is never formed. */
     for (i = 0; i < s->room_count; i++) {
         const ScriptRoom *room = &s->rooms[i];
         for (f = 0; f < room->frag_len; f++) {

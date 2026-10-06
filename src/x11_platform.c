@@ -10,26 +10,23 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* X11 window backend. Fixed size and not resizable: the game renders at one
- * logical scale and lets the display enlarge the result, so resize and DPI
- * handling never reach the drawing code. */
+/* X11 window backend. */
 
 typedef struct X11State {
     Display *dpy;
     Window win;
     GC gc;
     XImage *img;
-    uint32_t *stage;   /* window sized: scaled canvas in 0xRRGGBB, then swapped */
+    uint32_t *stage;   /* window sized: scaled canvas in 0xRRGGBB */
     size_t stage_cap;
-    int32_t w, h;      /* window size in physical pixels */
-    int32_t img_w, img_h;  /* size the XImage was built for */
+    int32_t w, h;
+    int32_t img_w, img_h;
     Atom wm_delete;
 } X11State;
 
 static X11State g_x11;
 
-/* Sleeps until X has something to say, so the frame loop costs nothing while
- * the window is idle. */
+/* Sleeps until X has something to say. */
 static void x11_wait(void *self, int timeout_ms) {
     X11State *st = (X11State *)self;
     struct pollfd pfd;
@@ -59,9 +56,8 @@ static int x11_pump(void *self, IoCtx *ctx) {
         case ButtonPress:
         case ButtonRelease:
         case MotionNotify:
-            /* Buttons 4 to 7 are the scroll wheel in X11, and buttons above 8
-             * are back and forward. There is no wheel event yet, so letting
-             * them through would hand the application invented buttons. */
+            /* Buttons 4-7 are the wheel and 8-9 back/forward. There is no wheel event
+             * yet, so letting them through hands the application invented buttons. */
             if (xe.type != MotionNotify &&
                 (xe.xbutton.button < 1 || xe.xbutton.button > 3)) {
                 break;
@@ -81,8 +77,7 @@ static int x11_pump(void *self, IoCtx *ctx) {
             io_post_event(ctx, &ev);
             break;
         case ConfigureNotify:
-            /* The window is resizable, so the canvas stays virtual and only the
-             * view size changes. Nothing in the drawing code hears about it. */
+            /* Resizable: only the view size changes, the canvas stays virtual. */
             if (xe.xconfigure.width != st->w || xe.xconfigure.height != st->h) {
                 st->w = xe.xconfigure.width;
                 st->h = xe.xconfigure.height;
@@ -114,8 +109,7 @@ static int x11_open(void *self, const char *title, int32_t w, int32_t h) {
     if (st->dpy == NULL) {
         return 0;
     }
-    /* io_backend_open passes the view size, so the window opens at the size the
-     * caller asked for; the canvas it shows is ctx->w by ctx->h. */
+    /* io_backend_open passes the view size, so the window opens at it. */
     st->w = w;
     st->h = h;
 
@@ -130,8 +124,7 @@ static int x11_open(void *self, const char *title, int32_t w, int32_t h) {
                             CopyFromParent, CWBackPixel | CWEventMask, &attr);
     (void)mask;
 
-    /* Resizable: a minimum keeps the window from becoming useless, but nothing
-     * pins it, and ConfigureNotify only ever changes the view size. */
+    /* Resizable with only a minimum; ConfigureNotify changes the view size only. */
     memset(&hints, 0, sizeof hints);
     hints.flags = PMinSize;
     hints.min_width = 160;
@@ -172,10 +165,9 @@ static void x11_present(void *self, IoCtx *ctx) {
     X11State *st = (X11State *)self;
     size_t n = (size_t)st->w * (size_t)st->h;
 
-    /* The XImage points at our staging buffer, so the image must be destroyed
-     * before that buffer is freed. Doing it the other way round leaves Xlib
-     * holding a dangling pointer, which is exactly the kind of thing that only
-     * shows up as an ASan DEADLYSIGNAL on someone else's machine. */
+    /* The XImage points at the staging buffer, so the image must be destroyed
+     * before that buffer is freed, or Xlib holds a dangling pointer -- which
+     * surfaces as an ASan DEADLYSIGNAL on someone else's machine. */
     if (st->img != NULL && (st->img_w != st->w || st->img_h != st->h)) {
         st->img->data = NULL;
         XDestroyImage(st->img);
@@ -204,10 +196,9 @@ static void x11_present(void *self, IoCtx *ctx) {
     }
     /* The virtual canvas is scaled to the window here, and only here. */
     io_scale_canvas(ctx, st->stage, st->w, st->h);
-    /* No channel swap: a 0xRRGGBB word in little endian memory is already the
-     * bytes B,G,R,0 that a depth 24 XImage wants. Swapping here used to cost a
-     * full pass over the window and exchanged red with blue at the same time,
-     * which no amount of white-on-grey text would have revealed. */
+    /* No channel swap: a 0xRRGGBB word in little endian memory is already the B,G,R,0
+     * a depth 24 XImage wants. Swapping cost a full pass and exchanged red with blue,
+     * which white-on-grey text would never have revealed. */
     XPutImage(st->dpy, st->win, st->gc, st->img, 0, 0, 0, 0,
               (unsigned)st->w, (unsigned)st->h);
     XFlush(st->dpy);
@@ -244,8 +235,7 @@ static const IoBackend x11_backend = {
     x11_close
 };
 
-/* The platform entry point for this build. With no DISPLAY there is no window to
- * hand back, and reporting that beats dying inside XOpenDisplay. */
+/* With no DISPLAY there is no window to hand back, which beats dying in XOpenDisplay. */
 const IoBackend *io_platform_backend(void) {
     if (getenv("DISPLAY") == NULL) {
         return NULL;

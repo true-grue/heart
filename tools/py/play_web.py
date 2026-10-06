@@ -6,7 +6,12 @@
 границы чипов по пикселям — тогда не нужны метрики шрифта, и драйвер не врётся из-за
 того, что в нём другие цифры.
 
-  python3 tools/py/play_web.py routes.json assets/script/heart.script assets/script
+  Каталог назначения — тот, где лежит index.html: драйвер грузит игру кадром относительно
+себя, а всё, что попало в assets/, уезжает в index.data и в релиз. Страницу отдаёт
+python3 -m http.server на 8131, иначе прелоад .data не грузится.
+
+  python3 -m http.server 8131 --bind 127.0.0.1 &          # в каталоге сборки веба
+  python3 tools/py/play_web.py routes.json assets/script/heart.script heart
 """
 
 from __future__ import annotations
@@ -69,6 +74,15 @@ def main(argv=None):
         return 2
     routes_path, script_path, out_dir = argv[0], argv[1], argv[2]
     only = argv[3].split(",") if len(argv) > 3 else None
+
+    # The web build packs the whole assets tree into index.data, so anything written
+    # under assets/ ships in the release. The driver has to sit next to index.html
+    # instead, and being asked for the packed tree means the call is wrong, not the
+    # tool: it was in this file's own usage line, and the files landed in the data.
+    if "assets" in os.path.realpath(out_dir).split(os.sep):
+        print("не пишу в %s: этот каталог пакуется в сборку веба. "
+              "укажи каталог, где лежит index.html" % out_dir)
+        return 2
 
     with open(routes_path, encoding="utf-8") as fh:
         routes = json.load(fh)

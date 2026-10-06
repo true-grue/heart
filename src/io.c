@@ -24,9 +24,8 @@ int io_init(IoCtx *ctx, uint32_t *pixels, int32_t w, int32_t h) {
     ctx->clip_n = 1;
     ctx->view_w = w;
     ctx->view_h = h;
-    /* A one to one mapping until a backend reports a real window, and it comes out of
-     * this on its own: the canvas matches the window because the two numbers are equal,
-     * not because anything was cached while they were. */
+    /* One to one until a backend reports a window: view_w/view_h equal w/h, so
+     * headless callers get a real projection. */
     return 1;
 }
 
@@ -42,7 +41,7 @@ void io_push_clip(IoCtx *ctx, IoRect r) {
     if (ctx->clip_n >= IO_CLIP_MAX) {
         return;
     }
-    /* A nested clip intersects its parent, so a child cannot draw outside it. */
+    /* A nested clip intersects its parent. */
     right = (r.x + r.w < cur.x + cur.w) ? (r.x + r.w) : (cur.x + cur.w);
     bottom = (r.y + r.h < cur.y + cur.h) ? (r.y + r.h) : (cur.y + cur.h);
     r.x = (r.x > cur.x) ? r.x : cur.x;
@@ -58,33 +57,23 @@ void io_pop_clip(IoCtx *ctx) {
     }
 }
 
-/* Where the canvas sits inside the window. Aspect ratio is preserved and the
- * surplus becomes bars. Stretching would defeat the point of virtual
- * coordinates: the game's proportions would end up depending on the window
- * shape, so it would look different on every platform and every monitor.
+/* Where the canvas sits inside the window: aspect preserved, surplus becomes bars,
+ * since stretching would make the interface depend on the window shape.
  *
- * Scaling and pointer conversion must agree exactly, or a tap lands somewhere
- * other than where it was drawn, so both go through this one function. */
+ * Pointer conversion goes through here too, or a tap lands off what was drawn. */
 static IoRect letterbox(int32_t dst_w, int32_t dst_h, int32_t cw, int32_t ch) {
     IoRect r;
     int32_t vw, vh;
     int32_t k;
 
-    /* Whole numbers only, and the scale is the largest one that still fits. A
-     * fractional scale resamples every glyph, and the font is a raster: at 1.6 a
-     * vertical stroke lands between two pixel columns and the text comes out soft
-     * on every platform, not only here. Dropping to the next whole number trades a
-     * band of unused window for a font that stays on its grid.
-     *
-     * The same integer drives pointer conversion below, so a tap still lands on the
-     * pixel it was drawn at. */
+    /* Largest whole scale that fits: a fractional one resamples every glyph, and at 1.6 a
+     * vertical stroke lands between two pixel columns and the raster font goes soft. */
     k = dst_w / cw;
     if (dst_h / ch < k) {
         k = dst_h / ch;
     }
     if (k < 1) {
-        /* The window is smaller than the canvas. One to one is the only scale that
-         * keeps the raster intact, and the guards below shrink the rectangle to fit. */
+        /* Window below canvas size: 1 is the only scale that keeps the raster. */
         k = 1;
     }
     vw = cw * k;
@@ -95,8 +84,8 @@ static IoRect letterbox(int32_t dst_w, int32_t dst_h, int32_t cw, int32_t ch) {
     if (vh < 1) {
         vh = 1;
     }
-    /* Rounding must never produce a rectangle larger than the window, or the
-     * centred offset goes negative and the writes leave the buffer. */
+    /* Never larger than the window, or the centred offset goes negative and the
+     * writes leave the buffer. */
     if (vw > dst_w) {
         vw = dst_w;
     }
@@ -114,9 +103,9 @@ void io_set_view(IoCtx *ctx, int32_t view_w, int32_t view_h) {
     if (ctx == NULL || view_w <= 0 || view_h <= 0) {
         return;
     }
-    /* Only the size is recorded. The canvas rectangle inside the window is worked out
-     * where it is needed, because a copy of it is a second answer to the same question
-     * and the two answers drift the moment one place is updated and the other is not. */
+    /* Only the size is stored. A cached canvas rect is a second answer to the same
+     * question, and it drifts: Windows never called io_set_view on WM_SIZE and no button
+     * hit after a resize. */
     ctx->view_w = view_w;
     ctx->view_h = view_h;
 }
@@ -125,8 +114,8 @@ void io_to_virtual(const IoCtx *ctx, int32_t win_x, int32_t win_y,
                    int32_t *out_x, int32_t *out_y) {
     IoRect v;
 
-    /* The outputs are written on every path: callers pass locals straight into
-     * state, and a partial write would leave them indeterminate. */
+    /* Outputs written on every path; callers pass locals straight into state, and a
+     * partial write leaves them indeterminate. */
     if (out_x != NULL) {
         *out_x = 0;
     }
@@ -140,9 +129,8 @@ void io_to_virtual(const IoCtx *ctx, int32_t win_x, int32_t win_y,
     if (v.w <= 0 || v.h <= 0) {
         return;
     }
-    /* The canvas origin sits at the view rectangle origin, so the offset is
-     * subtracted before scaling and not added afterwards. Adding it back put
-     * every tap inside the letterbox bars up to a full bar width off. */
+    /* Canvas origin is the view rect origin, so the offset is subtracted before
+     * scaling; adding it back shifted every tap up to a full bar width off. */
     if (out_x != NULL) {
         *out_x = (int32_t)(((int64_t)(win_x - v.x) * ctx->w) / v.w);
     }
@@ -167,35 +155,15 @@ void io_scale_canvas(const IoCtx *ctx, uint32_t *dst, int32_t dst_w, int32_t dst
     oy = view.y;
     last_sy = ctx->h - 1;
 
-    /* Bars only need clearing when there are any, which is the uncommon case
-     * for a window that matches the canvas aspect. */
     if (vw != dst_w || vh != dst_h) {
         for (y = 0; y < dst_h; y++) {
             memset(dst + (size_t)y * (size_t)dst_w, 0, (size_t)dst_w * sizeof(uint32_t));
         }
     }
 
-    /* Every destination pixel is the average of the source pixels that fall into it.
-     *
-     * Nearest neighbour at a whole number is an exact doubling, and that case is left
-     * exactly as it was: at the size the window is normally opened, nothing softens and
-     * the font stays crisp.
-     *
-     * At a fractional scale nearest neighbour has to either stretch some source pixels
-     * over two destinations or skip them entirely, and it cannot do both consistently.
-     * The result is that some rows of pixels are drawn twice as tall as their
-     * neighbours and some are missing outright, which on a sixteen pixel font reads as
-     * letters cut in half. That is not a defect of the font and not of Windows; it was
-     * measured here at 1.9281 when the window was created from its outer size. Averaging
-     * cannot drop anything, so the letters stay whole at whatever size the window is
-     * dragged to.
-     *
-     * Stepping is done with fixed point accumulators rather than a division per pixel,
-     * for the reason the comment above used to carry: the obvious form measured at 25 ms
-     * for a 1920x1080 window.
-     */
-    /* One division per axis for the whole frame, not one per pixel: the per pixel form
-     * is what used to cost 25 ms at 1920x1080. */
+    /* Each destination pixel averages the sources inside it; nearest neighbour at a
+     * fractional scale cuts a 16 px font in half (measured at 1.9281). One division per
+     * axis for the frame, not per pixel: that form measured 25 ms at 1920x1080. */
     step_x = ((int64_t)ctx->w << 16) / vw;
     sy = 0;
     yerr = 0;
@@ -253,8 +221,7 @@ void io_scale_canvas(const IoCtx *ctx, uint32_t *dst, int32_t dst_w, int32_t dst
 
 /* --------------------------------------------------------- fixed point -- */
 
-/* Division truncates toward zero, so floor and ceil are spelled out rather than
- * relying on the sign of a right shift. */
+/* Division truncates toward zero, so floor and ceil are spelled out. */
 static int32_t fx_floor(IoFixed v) {
     int32_t q = v / IO_FX_ONE;
     if (v % IO_FX_ONE < 0) {
@@ -307,8 +274,8 @@ static void fill_span(IoCtx *ctx, int32_t row, IoFixed xs, IoFixed xe, IoColor c
     int32_t x0 = fx_ceil(xs - IO_FX_HALF);
     int32_t x1 = fx_ceil(xe - IO_FX_HALF) - 1;
 
-    /* Without antialiasing a sub-pixel span would vanish and flicker as it
-     * moves, so any span claims at least one pixel. */
+    /* Without antialiasing a sub-pixel span would vanish and flicker as it moves,
+     * so any span claims at least one pixel. */
     if (x1 < x0) {
         x0 = fx_floor(xs + (xe - xs) / 2);
         x1 = x0;
@@ -321,8 +288,7 @@ static void fill_span(IoCtx *ctx, int32_t row, IoFixed xs, IoFixed xe, IoColor c
     }
 }
 
-/* Every edge axis aligned and every corner a whole pixel: such a polygon needs
- * no coverage and can be filled exactly. */
+/* Every edge axis aligned and every corner a whole pixel: fillable exactly. */
 static int poly_is_crisp(const IoSeg *edges, uint32_t n) {
     uint32_t i;
 
@@ -339,8 +305,8 @@ static int poly_is_crisp(const IoSeg *edges, uint32_t n) {
     return 1;
 }
 
-/* Computes the rows a polygon touches, in screen space, and the sample
- * position to use when the shape is too thin to hold a pixel centre. */
+/* Rows a polygon touches, and the sample line for a shape too thin to hold a
+ * pixel centre. */
 static void poly_rows(IoCtx *ctx, const IoSeg *edges, uint32_t n, IoFixed dy,
                        int32_t *row_lo, int32_t *row_hi, int *thin, IoFixed *mid) {
     const IoSeg *e0 = &edges[0];
@@ -361,8 +327,8 @@ static void poly_rows(IoCtx *ctx, const IoSeg *edges, uint32_t n, IoFixed dy,
     *thin = 0;
     *mid = 0;
     if (*row_hi < *row_lo) {
-        /* Too thin to contain a pixel centre anywhere: sample the middle, so the
-         * feature claims a row instead of flickering out of existence. */
+        /* Too thin to hold a pixel centre: sample the middle, so the feature
+         * claims a row instead of flickering out of existence. */
         *thin = 1;
         *mid = (ymin + ymax) / 2;
         *row_lo = fx_floor(*mid);
@@ -372,7 +338,6 @@ static void poly_rows(IoCtx *ctx, const IoSeg *edges, uint32_t n, IoFixed dy,
     *row_hi = clamp_i32(*row_hi, clip.y, clip.y + clip.h - 1);
 }
 
-/* Gathers and sorts the crossings of one sample line. Returns how many. */
 static int gather_crossings(IoCtx *ctx, const IoSeg *edges, uint32_t n, IoFixed yc) {
     uint32_t i;
     int nc = 0;
@@ -441,9 +406,8 @@ static void blend_px(IoCtx *ctx, int32_t x, int32_t y, IoColor c, uint32_t cov) 
     ctx->pixels[(size_t)y * (size_t)ctx->w + (size_t)x] = (r << 16) | (g << 8) | b;
 }
 
-/* Adds a span's horizontal coverage. A pixel touched by two of the vertical
- * samples accumulates twice, which is what makes a diagonal edge read as grey
- * rather than as a staircase. */
+/* A pixel touched by two vertical samples accumulates twice, which is what makes
+ * a diagonal edge read as grey rather than as a staircase. */
 static void add_span(IoCtx *ctx, int32_t x_lo, int32_t x_hi, IoFixed xs, IoFixed xe) {
     IoFixed x = xs;
     int32_t px = fx_floor(xs);
@@ -474,12 +438,9 @@ static int fill_covered(IoCtx *ctx, const IoSeg *edges, uint32_t n, IoFixed dx, 
     for (row = row_lo; row <= row_hi; row++) {
         memset(ctx->rowcov + clip.x, 0, (size_t)clip.w * sizeof(uint16_t));
         for (s = 0; s < IO_AA_SAMPLES; s++) {
-            /* Fixed eighths of the row. Spread over the covered slice instead,
-             * which looks tempting, but then all four samples land inside a thin
-             * shape and it comes out opaque, which is the opposite of what the
-             * antialiasing is for. Thin shapes are handled by the row fallback in
-             * poly_rows, which is the right trade for a one pixel rule: you asked
-             * for a hairline, you get a solid hairline rather than a grey one. */
+            /* Fixed eighths of the row, not spread over the covered slice: inside a thin
+             * shape all four samples land and it comes out opaque. Thin shapes are the
+             * row fallback in poly_rows: a hairline comes out solid, not grey. */
             IoFixed yc = (thin ? mid
                                : ((IoFixed)row * IO_FX_ONE +
                                   (IoFixed)(2 * s + 1) * IO_AA_STEP)) - dy;
@@ -525,9 +486,8 @@ int io_fill_poly(IoCtx *ctx, const IoSeg *edges, uint32_t n, IoFixed dx, IoFixed
     }
     poly_rows(ctx, edges, n, dy, &row_lo, &row_hi, &thin, &mid);
 
-    /* Budget check before anything is drawn, so an oversized polygon is never
-     * left half painted. The extremes are enough: a sample line between them
-     * crosses no more edges than they do. */
+    /* Budget check before anything is drawn, so an oversized polygon is never half
+     * painted; the extremes cross no more edges than any line between them. */
     if (poly_is_crisp(edges, n) || ctx->w > IO_COVER_MAX) {
         for (row = row_lo; row <= row_hi; row++) {
             IoFixed yc = (thin ? mid : (IoFixed)row * IO_FX_ONE + IO_FX_HALF) - dy;
@@ -635,18 +595,14 @@ void io_poll(IoCtx *ctx, int timeout_ms) {
     if (ctx->backend != NULL && ctx->backend->pump != NULL) {
         ctx->backend->pump(ctx->backend->self, ctx);
     }
-    /* Read the pending events without consuming them: the application reads the
-     * same queue through io_next_event, and consuming it here would starve it. */
+    /* Read pending events without consuming them; io_next_event must still see them. */
     for (i = ctx->ring_read; i < ctx->ring_n; i++) {
         IoEvent *q = &ctx->ring[i];
 
         if (q->kind == IO_EV_POINTER_DOWN || q->kind == IO_EV_POINTER_UP ||
             q->kind == IO_EV_POINTER_MOVE) {
-            /* Backends report window pixels, and converting here means nothing
-             * above this layer ever has to know the window exists. The queued
-             * event is rewritten in place, so the application, the accessors and
-             * the drag origin all speak virtual coordinates and only the backend
-             * speaks window ones. */
+            /* Converted here so nothing above knows the window exists; the queued event
+             * is rewritten in place, so accessors and drag origin speak virtual too. */
             io_to_virtual(ctx, q->x, q->y, &q->x, &q->y);
         }
         ev = *q;

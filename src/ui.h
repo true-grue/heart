@@ -10,15 +10,10 @@
 
 /* The whole of the interface's state, in one type, in a header.
  *
- * It lived in main.c, which meant nothing else could name it: a function that takes a
- * frame had to be declared against an incomplete `struct Ui`, so every such function had
- * to live in main.c too. That is the whole reason main.c was 2286 lines: not because the
- * drawing needed the room, but because the state had exactly one owner and the owner was
- * the wrong file.
- *
- * Moving the type out first is deliberate. Moving the code first does not compile, and
- * moving both at once gives no way to tell a mistake in the move from a mistake in the
- * code. */
+ * It lived in main.c, so a function taking a frame had to be declared against an
+ * incomplete `struct Ui` and could not live anywhere else. That is the whole reason
+ * main.c was 2286 lines. Moving the type out first is deliberate: moving the code
+ * first does not compile, and moving both at once hides a mistake in the move. */
 
 #define GAME_W 640
 #define GAME_H 480
@@ -27,18 +22,17 @@
 #define FONT_PATH "assets/font/sans.font"
 
 #define MARGIN_X 16
-#define PAD 10                     /* text inset inside a band */
-#define BTN_H 26                   /* a button in the control band */
+#define PAD 10
+#define BTN_H 26
 #define CHIP_H 44                  /* a verb or object chip */
 #define CHIP_GAP 4
 #define CHIP_PAD_X 6
-/* Kept free at the right end of every chip row so the "and N more" chip has somewhere
- * to go. Seven verbs is the widest row in the shipped games and it fits with sixteen
- * pixels to spare, but a row one word longer must degrade honestly rather than run off
- * the canvas: a chip drawn past the edge is also a chip the pointer cannot reach. */
+/* Kept free at the right end of every chip row so the "and N more" chip has somewhere to
+ * go. A row one word longer must degrade honestly rather than run off the canvas: a chip
+ * drawn past the edge is also a chip the pointer cannot reach. */
 #define CHIP_ROW_RESERVE 56
-/* Kept free at the right end of the item strip so the "and N more" chip always has
- * somewhere to go. Four glyphs is the widest it ever gets: a plus and two digits. */
+/* Kept free at the right end of the item strip for the "and N more" chip. Four glyphs
+ * is the widest it ever gets: a plus and two digits. */
 #define COUNTER_RESERVE 60
 
 #define ROWS_MAX 32
@@ -63,12 +57,12 @@
 #define C_RULE IO_RGB(56, 58, 68)
 #define C_CARET IO_RGB(226, 200, 140)
 /* What the eye is meant to catch: text that turned up because of what the player just
- * did. Warm against the cold ink, and dark enough to keep reading at length. */
+ * did. Warm against the cold ink, dark enough to keep reading at length. */
 #define C_HOT IO_RGB(255, 196, 108)
 
-/* A run of the description to draw in the accent colour. Byte offsets into the text the
- * band is drawing, which is what lets a highlight survive rewrapping: the run is
- * marked in the source text and the row drawer finds it wherever it lands. */
+/* A run of the description to draw in the accent colour, as byte offsets into the text the
+ * band is drawing. Marked in the source text, which is what lets a highlight survive
+ * rewrapping: the row drawer finds the run wherever it lands. */
 typedef struct Span {
     uint32_t off;
     uint32_t len;
@@ -89,8 +83,8 @@ typedef struct Span {
 #define FRAG_MAX 64
 
 /* The carried strip: how many things it can hold, and the shortest name it will shorten a
- * name to. A name of one character plus the dot is all it will leave, because a dot on
- * its own says nothing about what was carried. */
+ * name to. One character plus the dot is all it will leave, because a dot on its own
+ * says nothing about what was carried. */
 #define ITEM_MAX 32
 #define ITEM_MIN_CHARS 2
 
@@ -100,9 +94,9 @@ typedef struct Hit {
     Sym sym;
 } Hit;
 
-/* The command under construction: the slots already chosen, left to right. The
- * format has a verb and an object today; CMD_SLOTS leaves the sentence able to
- * grow without the band learning a new shape. */
+/* The command under construction: the slots already chosen, left to right. The format has
+ * a verb and an object today; CMD_SLOTS leaves the sentence able to grow without the band
+ * learning a new shape. */
 typedef struct Command {
     Sym slot[CMD_SLOTS];
     int filled;
@@ -124,21 +118,20 @@ typedef struct Ui {
 
     size_t last_log;      /* to notice a new answer and restart the typing */
     double typed;         /* characters revealed so far */
-    /* How far the answer band has scrolled, in pixels, and where it is going. Rows
-     * would jump a whole line every time the text grew past the bottom, and that jump
-     * is the blink. */
+    /* How far the answer band has scrolled, in pixels, and where it is going. Rows would
+     * jump a whole line every time the text grew past the bottom, and that jump is the
+     * blink. */
     double scroll;
     double scroll_want;
-    /* The description scrolls its tail too, for the same reason the answer does: a room
-     * can say more than fits, and cutting it off is worse than moving it. */
+    /* The description scrolls its tail too: a room can say more than fits, and cutting it
+     * off is worse than moving it. */
     double dscroll;
     double dscroll_want;
     int animate;          /* off for the walkthrough: the frames must be comparable */
     int overfull;         /* frames whose bands could not hold their own text */
     size_t last_room;      /* to notice a new room and start its scroll over */
     /* Fragments of this room already on screen, and those that arrived with the last
-     * command. Keyed on the fragment's line in the script, the only stable name one
-     * has. */
+     * command. Keyed on the fragment's line in the script, the only stable name one has. */
     int frag_line[FRAG_MAX];
     size_t frag_line_n;
     int frag_hot[FRAG_MAX];
@@ -146,9 +139,9 @@ typedef struct Ui {
     int done;             /* the answer is fully revealed */
 } Ui;
 
-/* The few things a second file needs in order to look at a frame the way the drawing
- * does. Exported as functions and not as data, so this header stays the only place that
- * says how a chip is measured, and a second copy of the arithmetic cannot appear. */
+/* The few things a second file needs in order to look at a frame the way the drawing does.
+ * Exported as functions and not as data, so this header stays the only place that says how
+ * a chip is measured and a second copy of the arithmetic cannot appear. */
 uint32_t ui_wrap_row(const TextFont *f, const char *t, uint32_t len, int32_t max_w,
                      uint32_t *rest);
 uint32_t ui_chip_label_sym(const Script *s, Sym sym, char *out, size_t cap);
@@ -161,8 +154,8 @@ void ui_mark_new_fragments(Ui *ui, const Game *g);
  * inside the drawing there is no way to. */
 void items_fit(const TextFont *f, char label[][LABEL_MAX], uint32_t *len, size_t n);
 
-/* The drawing primitives. They move as a group because each one calls at least one
- * other, so moving one alone leaves a chain of forward declarations behind. */
+/* The drawing primitives. They move as a group because each one calls at least one other,
+ * so moving one alone leaves a chain of forward declarations behind. */
 void ui_add_hit(Ui *ui, IoRect r, int kind, Sym sym);
 void ui_text_at(IoCtx *c, const TextFont *f, int32_t x, int32_t top, const char *t,
                 uint32_t len, IoColor ink);
@@ -203,9 +196,9 @@ Layout ui_layout_commands(Ui *ui, const char *desc, uint32_t desc_len, const cha
 int32_t ui_draw_slots(Ui *ui, IoCtx *c, const TextFont *f, int32_t x, int32_t y,
                       const Sym *slot, size_t filled);
 
-/* The log, read the way the drawing and the walkthrough both read it. Shared rather
- * than moved into game.c because it is about how the answer is laid out on screen, and
- * the drawing is the only place that decides. */
+/* The log, read the way the drawing and the walkthrough both read it. Shared rather than
+ * moved into game.c because it is about how the answer is laid out on screen, and the
+ * drawing is the only place that decides. */
 size_t ui_last_log_index(const Game *g, int want_room);
 size_t ui_block_end(const Game *g, size_t from);
 size_t ui_block_text(const Game *g, size_t from, size_t to, char *out, size_t cap);

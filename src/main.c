@@ -1,7 +1,5 @@
-/* Must precede every include, including the project's own headers: a feature-test
- * macro consulted after <stdio.h> has already been read is no macro at all. On musl
- * clock_gettime is declared either way, so moving this below an include cost nothing
- * here and hid the breakage; on glibc it fails to compile. */
+/* Must precede every include: a feature-test macro consulted after <stdio.h> is no
+ * macro at all. musl declares clock_gettime either way and hides the breakage. */
 #define _POSIX_C_SOURCE 199309L
 
 #include "walk.h"
@@ -27,26 +25,19 @@
  *   command   the command being assembled, and the choices for the next slot
  *   answer    what the game said back, typed out
  *
- * The command is built out of slots filled from left to right. The slot being
- * filled is the empty one; its choices are offered on the row below. A sentence
- * may have more parts than the format has today, so the slot count is an upper
- * bound rather than the shape, and nothing here assumes two.
- *
- * Every ui_band is a fixed height in virtual pixels, so the layout is the layout on
- * every platform and at every window size.
+ * The command is built from slots filled left to right; the empty one is being filled
+ * and its choices sit on the row below. The slot count is an upper bound, not the shape:
+ * nothing here assumes two.
  */
 
 
-/* Band geometry is decided per frame, not fixed here. The system bands grow down from
- * the top, the play bands grow up from the bottom, and the description takes whatever
- * is left between them, so no ui_band is taller than its content and nothing is reserved
- * that goes unused. The answer is the one that gives way when a frame holds more than
- * the canvas has room for: it already scrolls its tail, so shrinking it costs least. */
-/* The most words one command can have, and so the most slots the palette needs.
- * Equals RULE_MAX_WORDS: a command the screen cannot show is a command the player
+/* Band geometry is decided per frame, not fixed here: system bands grow down from the
+ * top, play bands up from the bottom, the description takes the rest, and the answer is
+ * the one that gives way, because it already scrolls its tail. */
+/* Equals RULE_MAX_WORDS: a command the screen cannot show is a command the player
  * cannot type. */
 
-#define TYPE_CPS 45                /* characters a second while the answer types */
+#define TYPE_CPS 45
 
 
 
@@ -95,27 +86,19 @@ static char *slurp(const char *path, size_t *len) {
 
 /* ------------------------------------------------------------- log read -- */
 
-/* Index into the log of the last block with the given kind of heading: a room block
- * carries its title, a command block the verb and object.
- *
- * Named for what it returns. It used to be called last_block, which reads like "the last
- * room", and it was compared against g->room, which is a room symbol. Those are different
- * numbers, the comparison was therefore true almost every frame, and the result was a
- * flash of highlight on entering a room that lasted until the next redraw. The name is
- * the only thing that stops it being made again. */
+/* Index into the log of the last block of the given heading kind. Named for what it
+ * returns: it used to read like "the last room" and was compared against g->room, a room
+ * symbol -- two different numbers, so the comparison was true almost every frame and
+ * entering a room flashed a highlight until the next redraw. */
 
-/* Where the block that starts at `from` ends: the next heading, or the log end. */
 
-/* The lines of one block joined into a single paragraph. A room description is
- * written as several says and must not read as several paragraphs, so the lines
- * are glued with a space and wrapped as one piece of prose. */
+/* One block joined into a single paragraph: a room description is written as several
+ * says and must not read as several, so lines are glued with a space. */
 
-/* Splits off the first visual row that fits in max_w and reports where the next
- * one starts. The break goes after the last space that fits, so words stay whole;
- * a single word wider than the row overhangs rather than being cut. */
+/* Break goes after the last space that fits, so words stay whole; a word wider than
+ * the row overhangs rather than being cut. */
 
-/* Largest codepoint boundary at or before `upto`, so a partially typed answer
- * never ends inside a letter. */
+/* Largest codepoint boundary at or before `upto`, so typing never ends mid-letter. */
 
 /* ------------------------------------------------------------ drawing -- */
 
@@ -149,8 +132,7 @@ static void do_save(const Game *g, const GameDef *def) {
     printf("сохранено: %s\n", path);
 }
 
-/* Splits a line into up to three words. The format is machine written, so a line
- * that does not fit is a corrupt file and is skipped rather than guessed at. */
+/* Machine-written format: a line that does not fit is corrupt, and is skipped. */
 static int split_words(char *line, char *w[], size_t cap[], int max) {
     int n = 0;
 
@@ -200,7 +182,6 @@ static int do_load(Ui *ui, Game *g, const GameDef *def) {
         if (n == 2 && strcmp(a, "комната") == 0) {
             room = script_sym_lookup(g->script, b, strlen(b));
         } else if (n == 3 && strcmp(a, "флаг") == 0) {
-            /* The name is the second word and the value the third. */
             uint8_t on = (uint8_t)(d[0] == '1');
             size_t blen = strlen(b);
             size_t i;
@@ -219,9 +200,8 @@ static int do_load(Ui *ui, Game *g, const GameDef *def) {
         fprintf(stderr, "в сохранении нет комнаты: %s\n", path);
         return 0;
     }
-    /* Clear the log first so the room is the only thing on screen, then enter it:
-     * that is what prints the title and whichever fragments the restored flags
-     * call for. */
+    /* Clear the log before entering, so the room is the only thing on screen and
+     * entering prints the title and the fragments the restored flags call for. */
     g->log_count = 0;
     g->finished = 0;
     g->won = 0;
@@ -243,10 +223,8 @@ static int inside(IoRect r, int32_t x, int32_t y) {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
 
-/* The seam a grammar fuzzer needs: read one script and print what the loader made of
- * it, and nothing else. No window, no font, no game, and every line is a fact rather
- * than a pointer, so two runs on two machines print the same thing and a diff between
- * them means something. */
+/* The grammar fuzzer's seam: read one script, print what the loader made of it. Every
+ * line is a fact rather than a pointer, so two machines agree and a diff means something. */
 static int probe_load(const char *path) {
     static _Alignas(16) unsigned char mem[1 << 21];
     Arena a;
@@ -293,17 +271,15 @@ static int probe_load(const char *path) {
     return 0;
 }
 
-/* Which script a per-game build starts with. `make heart` compiles the name into the
- * binary so that it runs with no argument; the plain quest still asks. */
+/* A per-game build compiles its name in and runs with no argument; plain quest asks. */
 #ifndef GAME_DEFAULT
 #define GAME_DEFAULT "tutorial"
 #endif
 
 static const GameDef *pick_game(int argc, char **argv) {
     size_t i;
-    /* The first argument that is not a flag is the game. A per-game build carries its
-     * own name inside, so `heart --walk out` has to work the same as `quest heart
-     * --walk out`: taking argv[1] blindly would read "--walk" as the game. */
+    /* First argument that is not a flag is the game: a per-game build carries its own
+     * name, so `heart --walk out` must work; argv[1] blindly would read "--walk". */
     const char *name = NULL;
 
     for (i = 1; i < (size_t)argc; i++) {
@@ -421,13 +397,10 @@ int main(int argc, char **argv) {
     ui.animate = 1;
     ui.cmd.filled = 0;
 
-    /* The walkthrough draws into the framebuffer and never reads input, so it runs
-     * on the test backend: no window, no display, nothing to tear down.
-     *
-     * The flag is looked for instead of read at argv[2], because a per-game build carries
-     * its name inside and takes it optionally: `heart --walk out` is three arguments, and
-     * insisting on four left it opening a window and waiting for a display instead of
-     * walking, which is the one build where nobody has a display. */
+    /* The walkthrough draws into the framebuffer and never reads input, so it runs on the
+     * test backend: no window, no display. The flag is searched for, not read at argv[2] --
+     * `heart --walk out` is three arguments, and insisting on four opened a window on the
+     * one build where nobody has a display. */
     {
         int a;
         for (a = 1; a < argc; a++) {
@@ -439,9 +412,8 @@ int main(int argc, char **argv) {
         }
     }
     {
-        /* The same frame report stress prints, so the two can be compared instead of
-         * guessed at. Off unless asked for: a game that prints its own rate every
-         * second is a game nobody would ship. */
+        /* Same frame report stress prints, so the two can be compared. Off unless
+         * asked: a game printing its own rate every second is a game nobody ships. */
         int a;
 
         for (a = 1; a < argc; a++) {
@@ -455,8 +427,7 @@ int main(int argc, char **argv) {
     }
     io_set_view(&ctx, GAME_W * SCALE, GAME_H * SCALE);
     if (audit) {
-        /* Before the window: the audit draws nothing and needs no display, which is
-         * the whole reason it is faster than looking at pictures. */
+        /* Before the window: the audit draws nothing and needs no display. */
     {
         static const char *titles[16];
         size_t tn = 0;
@@ -480,15 +451,15 @@ int main(int argc, char **argv) {
         int rc = walk_run(&ui, &game, &script, walk_dir);
 
         io_backend_close(&ctx);
-        /* The walkthrough returns from here, so the script text was never reaching the
-         * free at the end of main. Four and a half kilobytes, which valgrind pointed at. */
+        /* The walkthrough returns from here, so script_text never reached the free at the
+         * end of main -- valgrind pointed at those 4.5 kB. */
         free(script_text);
         return rc;
     }
 
-    /* Redraw only when something can have changed. The screen is static most of the
-     * time and repainting it anyway costs a full pass over the window for nothing,
-     * which is the difference between a game at rest and a fan running. */
+    /* Redraw only when something can have changed: a static screen repainted anyway
+     * costs a full pass over the window, which is the difference between a game at rest
+     * and a fan running. */
     dirty = 1;
     while (running) {
         IoEvent ev;
@@ -516,8 +487,8 @@ int main(int argc, char **argv) {
         while (io_next_event(&ctx, &ev)) {
             size_t i;
 
-            /* Any event at all means the screen may have to change, including the ones
-             * this game has no use for: a redraw is cheaper than deciding which count. */
+            /* Any event at all, including the unused ones: a redraw is cheaper than
+             * deciding which events count. */
             dirty = 1;
 
             if (ev.kind == IO_EV_QUIT) {
@@ -528,9 +499,8 @@ int main(int argc, char **argv) {
                 continue;
             }
             {
-                /* A tap anywhere while the answer is still typing finishes it. There
-                 * is no keyboard to press, and waiting out a long answer is the one
-                 * thing a finger should not have to do. */
+                /* A tap finishes a still-typing answer: there is no keyboard to press,
+                 * and waiting one out is the one thing a finger should not have to do. */
                 char probe[PARA_MAX];
                 size_t here = ui_last_log_index(&game, 0);
                 size_t n = (here != (size_t)-1)
@@ -558,9 +528,8 @@ int main(int argc, char **argv) {
                     do_load(&ui, &game, def);
                     break;
                 case HIT_NEW:
-                    /* A new run of the same script with nothing carried over. The save
-                     * on disk is left alone on purpose: Загрузить still brings the old
-                     * run back, so a misclick costs a walk and not the game. */
+                    /* The save on disk is left alone on purpose: Загрузить still brings
+                     * the old run back, so a misclick costs a walk, not the game. */
                     if (game_init(&game, &script) == GAME_OK) {
                         ui.cmd.filled = 0;
                         ui.last_log = game.log_count;
@@ -576,13 +545,11 @@ int main(int argc, char **argv) {
                     break;
                 case HIT_WORD:
                     ui.cmd.slot[ui.cmd.filled++] = h->sym;
-                    /* The command is over when no word can follow what is chosen. How
-                     * long a command is comes from the script, not from here. */
+                    /* Over when no word can follow; length comes from the script. */
                     if (game_more(&game, ui.cmd.slot, (size_t)ui.cmd.filled) == 0) {
                         game_command(&game, ui.cmd.slot, (size_t)ui.cmd.filled);
-                        /* Whatever the command brought into the room description is
-                         * what the player should notice, so it is marked here and
-                         * stays marked until they do something else. */
+                        /* Mark what the command brought in; it stays marked until the
+                         * player does something else. */
                         ui_mark_new_fragments(&ui, &game);
                         ui.last = ui.cmd;
                         ui.have_last = 1;
@@ -601,9 +568,8 @@ int main(int argc, char **argv) {
             }
         }
 
-        /* The answer is measured after the events, not before: the frame a command
-         * lands on is the frame that has to start typing it, and a length read
-         * before the command would come back as nothing and mark it finished. */
+        /* Measured after the events, not before: the frame a command lands on is the one
+         * that has to start typing it, and a length read earlier comes back as nothing. */
         if (game.log_count != ui.last_log) {
             ui.last_log = game.log_count;
             ui.typed = 0.0;
@@ -618,9 +584,8 @@ int main(int argc, char **argv) {
                                 sizeof probe);
         }
         if (ui.animate) {
-            /* A fixed time constant, so the scroll reads the same at any frame rate.
-             * Lagging behind the text by a fraction of a line is the point: the block
-             * glides instead of jumping. */
+            /* Fixed time constant, so scroll reads the same at any frame rate; a
+             * fraction of a line of lag is the point, the block glides. */
             double k = dt / 90.0;
 
             if (k > 1.0) {
@@ -633,13 +598,9 @@ int main(int argc, char **argv) {
             dirty = 1;
         }
         if (!ui.done) {
-            /* The answer types at a fixed rate, and a late frame must not make up for it
-             * by printing the rest. dt is capped for the rest of the loop at 250 ms, which
-             * is still eleven characters a frame at 45 a second: after any pause, a couple
-             * of those frames put a whole paragraph on the screen at once and the text
-             * stops looking typed. The pacing is the point of the answer band, so the step
-             * is capped tighter than the frame time is — one frame cannot print more than
-             * a word and a half, whatever the machine was doing. */
+            /* Fixed rate, and a late frame must not catch up by printing the rest: the
+             * step is capped at 40 ms, well under the loop's 250 ms dt cap, so one frame
+             * cannot print more than a word and a half whatever the machine was doing. */
             double step = (dt > 40.0) ? 40.0 : dt;
 
             ui.typed += TYPE_CPS * step / 1000.0;
@@ -667,8 +628,7 @@ int main(int argc, char **argv) {
                 fps_frames++;
             }
         }
-        /* Counted outside the redraw, so a screen standing still reports zero rather
-         * than saying nothing at all. Zero here is the whole point of skipping it. */
+        /* Counted outside the redraw, so a still screen reports zero instead of nothing. */
         if (fps_on && now_ms() - fps_since >= 1000.0) {
             fprintf(stderr, "%4d x %4d  %6.1f fps   худший кадр %6.1f ms\n",
                     ctx.view_w, ctx.view_h,
