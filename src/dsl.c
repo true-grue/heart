@@ -227,24 +227,23 @@ static const char *parse_action(Parse *P, const char *p, const char *end, Act *o
      * a peek at whether there are any. */
     if (p < end && (*p == '+' || *p == '-')) {
         const char *q = parse_items(P, p, end, 1, effect_len);
-        const char *text;
 
         if (q == NULL) {
             return NULL;
         }
-        out->kind = ACT_SAY;
-        text = skip_ws(q, end);
-        out->text = text;
-        out->text_len = (uint32_t)(trim_end(text, end) - text);
-        return end;
+        p = skip_ws(q, end);
     }
 
-    if (end - p >= 2 && p[0] == 'g' && p[1] == 'o' &&
+    /* The effects do not swallow what follows: the format puts them before the action,
+     * and the action is still one. "-осколок end ..." ends the game and takes the
+     * shard out of the hands on the same line, which is what the format promises in
+     * doc/grammar.bnf and what the two neighbouring lines already read as. */
+
+    if ((size_t)(end - p) >= 2 && p[0] == 'g' && p[1] == 'o' &&
         (p + 2 == end || p[2] == ' ' || p[2] == '\t')) {
         const char *w;
         size_t wl;
         const char *q = read_word(skip_ws(p + 2, end), end, &w, &wl);
-        const char *text;
 
         if (q == NULL) {
             return NULL;
@@ -252,28 +251,23 @@ static const char *parse_action(Parse *P, const char *p, const char *end, Act *o
         out->kind = ACT_GO;
         out->target = intern(P, w, wl);
         PUSH(P->sink.targets, P->sink.targets_n, out->target);
-        text = skip_ws(q, end);
-        out->text = text;
-        out->text_len = (uint32_t)(trim_end(text, end) - text);
-        return end;
-    }
-
-    /* The text is the rest of the line whatever it starts with: a quotation mark is
-     * as ordinary at the start of a sentence as a letter is. Only a leading end or
-     * win is a keyword, and only when it stands alone as the first word. */
-    if ((size_t)(end - p) >= 3 && p[0] == 'e' && p[1] == 'n' && p[2] == 'd' &&
-        (p + 3 == end || p[3] == ' ' || p[3] == '\t')) {
+        p = skip_ws(q, end);
+    } else if ((size_t)(end - p) >= 3 && p[0] == 'e' && p[1] == 'n' && p[2] == 'd' &&
+               (p + 3 == end || p[3] == ' ' || p[3] == '\t')) {
         out->kind = ACT_END;
-        out->text = skip_ws(p + 3, end);
+        p = skip_ws(p + 3, end);
     } else if ((size_t)(end - p) >= 3 && p[0] == 'w' && p[1] == 'i' && p[2] == 'n' &&
                (p + 3 == end || p[3] == ' ' || p[3] == '\t')) {
         out->kind = ACT_WIN;
-        out->text = skip_ws(p + 3, end);
+        p = skip_ws(p + 3, end);
     } else {
+        /* The text is the rest of the line whatever it starts with: a quotation mark is
+         * as ordinary at the start of a sentence as a letter is. Only a leading end or
+         * win is a keyword, and only when it stands alone as the first word. */
         out->kind = ACT_SAY;
-        out->text = p;
     }
-    out->text_len = (uint32_t)(trim_end(out->text, end) - out->text);
+    out->text = p;
+    out->text_len = (uint32_t)(trim_end(p, end) - p);
     return end;
 }
 

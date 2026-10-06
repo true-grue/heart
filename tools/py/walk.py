@@ -120,19 +120,20 @@ def _parse_items(s, i, end):
 
 def _parse_action(s, i, end):
     i = _skip_ws(s, i)
+    eff = []
     if i < end and s[i] in "+-":
         eff, i = _parse_items(s, i, end)
-        return "say", None, eff, _trim(s[_skip_ws(s, i):end])
+        i = _skip_ws(s, i)
     if end - i >= 2 and s[i:i + 2] == "go" and (i + 2 == end or s[i + 2] in " \t"):
         w = _read_word(s, i + 2, end)
         if w is None:
             raise ValueError("go без комнаты")
-        return "go", s[w[0]:w[1]], [], _trim(s[_skip_ws(s, w[1]):end])
+        return "go", s[w[0]:w[1]], eff, _trim(s[_skip_ws(s, w[1]):end])
     if end - i >= 3 and s[i:i + 3] == "end" and (i + 3 == end or s[i + 3] in " \t"):
-        return "end", None, [], _trim(line_tail(s, i + 3, end))
+        return "end", None, eff, _trim(line_tail(s, i + 3, end))
     if end - i >= 3 and s[i:i + 3] == "win" and (i + 3 == end or s[i + 3] in " \t"):
-        return "win", None, [], _trim(line_tail(s, i + 3, end))
-    return "say", None, [], _trim(s[i:end])
+        return "win", None, eff, _trim(line_tail(s, i + 3, end))
+    return "say", None, eff, _trim(s[i:end])
 
 
 def line_tail(s, i, end):

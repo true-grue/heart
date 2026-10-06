@@ -736,6 +736,55 @@ static void test_grammar_action(void) {
     (void)head;
 }
 
+/* rule = word* item* ":" item* action NL, so the effects come before the action and
+ * the action is still one. "-x end ..." ends the game and takes the thing out of the
+ * hands on the same line, which is the whole point of the sign on the effect side. */
+static void test_grammar_action_after_effects(void) {
+    static const char end_rule[] =
+        "room a A\n: ok\nотдать x +x : -x end Ушли.\n";
+    static const char win_rule[] =
+        "room a A\n: ok\nотдать y +y : -y win Спасли.\n";
+    static const char go_rule[] =
+        "room a A\n: ok\nвыйти z +z : -z go b Ушли.\nroom b B\n";
+    static const char say_rule[] =
+        "room a A\n: ok\nсказать w : +w услышали.\n";
+    /* A word that merely starts with the keyword is prose, not the action. */
+    static const char endgame[] =
+        "room a A\n: ok\nсказать v : +v endgame.\n";
+    Arena a;
+    Script s;
+    Rule *r;
+
+    CHECK_INT(arena_init(&a, g_arena_mem, sizeof g_arena_mem), 0);
+
+    CHECK_INT(script_load(&a, &s, end_rule, sizeof end_rule - 1, NULL), SCR_OK);
+    CHECK_INT(s.rule_count, 1);
+    r = &s.rules[0];
+    CHECK_INT(r->act.kind, ACT_END);
+    CHECK_INT(r->act.text_len, strlen("Ушли."));
+    CHECK(memcmp(r->act.text, "Ушли.", r->act.text_len) == 0);
+    CHECK_INT(r->effect_len, 1);
+    CHECK_INT(r->effects[0].present, 0);
+
+    CHECK_INT(script_load(&a, &s, win_rule, sizeof win_rule - 1, NULL), SCR_OK);
+    CHECK_INT(s.rules[0].act.kind, ACT_WIN);
+    CHECK_INT(s.rules[0].act.text_len, strlen("Спасли."));
+
+    CHECK_INT(script_load(&a, &s, go_rule, sizeof go_rule - 1, NULL), SCR_OK);
+    CHECK_INT(s.rules[0].act.kind, ACT_GO);
+    CHECK(script_room_by_id(&s, s.rules[0].act.target) != NULL);
+
+    /* An effect with prose after it is still one print, as it always was. */
+    CHECK_INT(script_load(&a, &s, say_rule, sizeof say_rule - 1, NULL), SCR_OK);
+    CHECK_INT(s.rules[0].act.kind, ACT_SAY);
+    CHECK_INT(s.rules[0].act.text_len, strlen("услышали."));
+    CHECK_INT(s.rules[0].effects[0].present, 1);
+
+    CHECK_INT(script_load(&a, &s, endgame, sizeof endgame - 1, NULL), SCR_OK);
+    CHECK_INT(s.rules[0].act.kind, ACT_SAY);
+    CHECK_INT(s.rules[0].act.text_len, strlen("endgame."));
+}
+
 static void test_script_rejects_bad_syntax(void) {
     static const char no_colon[] = "room a A\n: ok\nвзять x нет\n";
     static const char bad_bracket[] = "room a A\n: ok\nвзять x [-y нет\n";
@@ -2158,6 +2207,7 @@ const test_case test_cases[] = {
     TEST_CASE(test_grammar_rule),
     TEST_CASE(test_grammar_rule_with_no_words_is_a_description),
     TEST_CASE(test_grammar_action),
+    TEST_CASE(test_grammar_action_after_effects),
     TEST_CASE(test_script_rejects_bad_syntax),
     TEST_CASE(test_script_rejects_invalid_utf8),
     TEST_CASE(test_script_reports_out_of_memory),
